@@ -7,8 +7,8 @@ import os
 import json
 import sqlite3
 import logging
-from typing import Dict, Any, List, Optional, Union
 import threading
+from typing import Dict, Any, Optional
 
 from utils.settings import DB_TYPE, DB_PATH
 

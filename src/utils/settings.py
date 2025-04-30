@@ -18,7 +18,7 @@ BOT_DESCRIPTION = os.getenv("BOT_DESCRIPTION", "A multi-purpose Discord bot")
 EXTENSIONS_ENABLED = [
     ext.strip()
     for ext in os.getenv(
-        "EXTENSIONS_ENABLED", "nickname,admin,utility,moderation,fun"
+        "EXTENSIONS_ENABLED", "nickname,admin,utility,moderation,fun,welcome"
     ).split(",")
 ]
 
@@ -61,6 +61,14 @@ FEATURES = {
     "fun_commands": os.getenv("FEATURE_FUN_COMMANDS", "true").lower() == "true",
 }
 
+# Welcome/Goodbye Settings
+# Use 0 as default for IDs so the bot doesn't crash if they're not set
+WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0") or "0")
+GOODBYE_CHANNEL_ID = int(os.getenv("GOODBYE_CHANNEL_ID", "0") or "0")
+DEFAULT_ROLE_ID = int(os.getenv("DEFAULT_ROLE_ID", "0") or "0")
+WELCOME_EMBED_COLOR = int(os.getenv("WELCOME_EMBED_COLOR", "0x5CDBF0"), 0)
+GOODBYE_EMBED_COLOR = int(os.getenv("GOODBYE_EMBED_COLOR", "0xED4245"), 0)
+
 # LLM Prompts
 PROMPTS = {
     # Translation prompts
@@ -69,5 +77,19 @@ PROMPTS = {
         "Respond with ONLY the translated name.",
         "user_message": "Translate this name to {language}: {text}",
     },
-    # Add more prompts for other LLM-based features as needed
+    # Welcome/Goodbye message prompts
+    "welcome": {
+        "system_message": "You are a friendly Discord bot that creates personalized welcome messages. "
+        "Your messages should be warm, friendly, and around 2-3 sentences long. "
+        "Do not use emojis or formatting in your response.",
+        "user_message": "Create a warm welcome message for a new Discord member named {username} "
+        "who just joined a server called {server_name}. Make it personal and inviting.",
+    },
+    "goodbye": {
+        "system_message": "You are a friendly Discord bot that creates personalized goodbye messages. "
+        "Your messages should be respectful, a bit sad but positive, and around 2-3 sentences long. "
+        "Do not use emojis or formatting in your response.",
+        "user_message": "Create a goodbye message for a Discord member named {username} "
+        "who just left a server called {server_name}.",
+    },
 }
