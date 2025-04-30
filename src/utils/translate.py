@@ -1,13 +1,17 @@
 """
-Utility class for translating text using Groq LLM API.
+Utility class for translating text to different languages.
+
+This module provides translation functionality using Groq LLM API
+with proper error handling, caching and rate limiting.
 """
 
-import json
+import os
 import time
-import logging
-import aiohttp
 import asyncio
-from typing import Optional, List
+import aiohttp
+import json
+import logging
+from typing import Dict, Optional, Any
 from collections import OrderedDict
 
 from utils.settings import (
@@ -25,149 +29,40 @@ logger = logging.getLogger("translation")
 
 
 class LRUCache:
-    """
-    A simple Least Recently Used (LRU) cache implementation.
-
-    Attributes:
-        capacity: Maximum number of items the cache can hold
-        cache: OrderedDict storing cached items
-    """
+    """A simple Least Recently Used (LRU) cache."""
 
     def __init__(self, capacity: int):
-        """
-        Initialize the LRU cache.
-
-        Args:
-            capacity: Maximum number of items the cache can hold
-        """
-        self.capacity = max(1, capacity)  # Ensure at least capacity 1
+        self.capacity = max(1, capacity)
         self.cache = OrderedDict()
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Get a value from the cache by key.
-
-        Args:
-            key: The key to look up
-
-        Returns:
-            The cached value or None if not found
-        """
         if key not in self.cache:
             return None
-
-        # Move the accessed item to the end (most recently used)
         self.cache.move_to_end(key)
         return self.cache[key]
 
     def put(self, key: str, value: str) -> None:
-        """
-        Add or update a value in the cache.
-
-        Args:
-            key: The key to store the value under
-            value: The value to store
-        """
-        # If key exists, update its position
         if key in self.cache:
             self.cache.move_to_end(key)
-
         self.cache[key] = value
-
-        # Remove oldest item if capacity exceeded
         if len(self.cache) > self.capacity:
             self.cache.popitem(last=False)
 
 
-class RateLimiter:
-    """
-    Rate limiter to prevent API overload.
-
-    Attributes:
-        max_requests: Maximum number of requests allowed in the time window
-        time_window: Time window in seconds
-        request_timestamps: List of timestamp records
-    """
-
-    def __init__(self, max_requests: int = 60, time_window: int = 60):
-        """
-        Initialize the rate limiter.
-
-        Args:
-            max_requests: Maximum number of requests allowed in the time window
-            time_window: Time window in seconds
-        """
-        self.max_requests = max_requests
-        self.time_window = time_window
-        self.request_timestamps: List[float] = []
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> bool:
-        """
-        Try to acquire permission to make a request.
-
-        Returns:
-            True if the request is allowed, False if it should be rate limited
-        """
-        async with self._lock:
-            current_time = time.time()
-
-            # Remove timestamps outside the current window
-            self.request_timestamps = [
-                ts
-                for ts in self.request_timestamps
-                if current_time - ts <= self.time_window
-            ]
-
-            # Check if we can make a new request
-            if len(self.request_timestamps) < self.max_requests:
-                self.request_timestamps.append(current_time)
-                return True
-
-            # Calculate wait time until the next slot becomes available
-            if self.request_timestamps:
-                wait_time = self.time_window - (
-                    current_time - self.request_timestamps[0]
-                )
-                if wait_time > 0:
-                    logger.warning(
-                        f"Rate limit reached. Need to wait {wait_time:.2f} seconds"
-                    )
-                return False
-
-            return True
-
-    async def wait_for_capacity(self) -> None:
-        """
-        Wait until a request slot becomes available.
-        """
-        while True:
-            if await self.acquire():
-                return
-
-            # Wait a bit before checking again
-            await asyncio.sleep(0.5)
-
-
 class Translate:
-    """
-    Utility class for translating text to different languages using Groq LLM.
-    """
+    """Utility class for translating text to different languages."""
 
-    # Class-level cache for translations
+    # Class-level cache and cooldown tracking
     _translation_cache = LRUCache(TRANSLATION_CACHE_SIZE)
-
-    # Rate limiter for the API
-    _rate_limiter = RateLimiter(MAX_REQUESTS_PER_MINUTE, 60)
-
-    # Class-level cooldown tracking
     _last_request_time = 0
     _lock = asyncio.Lock()
+    _request_count = 0
+    _request_reset_time = 0
 
     @staticmethod
     async def to_japanese(text: str) -> str:
         """
-        Translate text to Japanese using Groq LLM.
+        Translate text to Japanese using Groq LLM or fallback.
 
         Args:
             text: The text to translate
@@ -175,50 +70,106 @@ class Translate:
         Returns:
             Translated Japanese text
         """
-        # Truncate input if too long
-        if len(text) > MAX_TRANSLATION_LENGTH:
-            logger.warning(
-                f"Input text too long ({len(text)} chars), truncating to {MAX_TRANSLATION_LENGTH}"
+        # Skip empty text
+        if not text:
+            return text
+
+        # Skip if already Japanese
+        if Translate.is_japanese(text):
+            logger.info(
+                f"Skipping translation for '{text}' as it's already in Japanese"
             )
+            return text
+
+        # Truncate if too long
+        if len(text) > MAX_TRANSLATION_LENGTH:
             text = text[:MAX_TRANSLATION_LENGTH]
 
         # Check cache first
         cached_result = Translate._translation_cache.get(f"ja:{text}")
         if cached_result:
-            logger.debug(f"Cache hit for '{text}'")
             return cached_result
 
         # Enforce cooldown between requests
         async with Translate._lock:
+            # Handle rate limiting
             current_time = time.time()
-            elapsed = current_time - Translate._last_request_time
 
+            # Reset counter if a minute has passed
+            if current_time - Translate._request_reset_time >= 60:
+                Translate._request_count = 0
+                Translate._request_reset_time = current_time
+
+            # Check if we're at the rate limit
+            if Translate._request_count >= MAX_REQUESTS_PER_MINUTE:
+                # If romanization fallback is enabled, use it instead of waiting
+                if USE_ROMANIZATION_FALLBACK:
+                    logger.warning("Rate limit reached, using romanization fallback")
+                    result = await Translate._romanize_to_japanese(text)
+                    Translate._translation_cache.put(f"ja:{text}", result)
+                    return result
+
+                # Otherwise wait until we can make a request
+                wait_time = 60 - (current_time - Translate._request_reset_time)
+                if wait_time > 0:
+                    logger.warning(f"Rate limit reached. Waiting {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+                    Translate._request_count = 0
+                    Translate._request_reset_time = time.time()
+
+            # Enforce cooldown between individual requests
+            elapsed = current_time - Translate._last_request_time
             if elapsed < TRANSLATION_COOLDOWN_SECONDS:
-                sleep_time = TRANSLATION_COOLDOWN_SECONDS - elapsed
-                logger.debug(f"Cooldown: waiting {sleep_time:.2f}s between requests")
-                await asyncio.sleep(sleep_time)
+                await asyncio.sleep(TRANSLATION_COOLDOWN_SECONDS - elapsed)
 
             # Update last request time
             Translate._last_request_time = time.time()
-
-        # Wait for rate limiter capacity
-        await Translate._rate_limiter.wait_for_capacity()
+            Translate._request_count += 1
 
         try:
-            result = await Translate._translate_with_groq(text, "ja")
+            # If no API key is available, use romanization
+            if not GROQ_API_KEY:
+                result = await Translate._romanize_to_japanese(text)
+            else:
+                # Try to translate with Groq
+                result = await Translate._translate_with_groq(text, "ja")
 
             # Cache the result
             Translate._translation_cache.put(f"ja:{text}", result)
-
             return result
-        except Exception as e:
-            logger.error(f"Translation failed: {str(e)}")
 
-            # Fall back to romanization if enabled
+        except Exception as e:
+            logger.error(f"Translation error: {str(e)}")
+            # Fall back to romanization
             if USE_ROMANIZATION_FALLBACK:
-                logger.info("Falling back to romanization")
-                return await Translate._romanize_to_japanese(text)
+                result = await Translate._romanize_to_japanese(text)
+                Translate._translation_cache.put(f"ja:{text}", result)
+                return result
             return text
+
+    @staticmethod
+    def is_japanese(text: str) -> bool:
+        """
+        Check if a string contains Japanese characters.
+
+        Args:
+            text: The text to check
+
+        Returns:
+            True if the text contains Japanese characters, False otherwise
+        """
+        # Unicode ranges for Japanese characters
+        # Hiragana (3040-309F), Katakana (30A0-30FF), Kanji (4E00-9FFF)
+        for char in text:
+            if any(
+                [
+                    "\u3040" <= char <= "\u309f",  # Hiragana
+                    "\u30a0" <= char <= "\u30ff",  # Katakana
+                    "\u4e00" <= char <= "\u9fff",  # Kanji
+                ]
+            ):
+                return True
+        return False
 
     @staticmethod
     async def _translate_with_groq(text: str, target_language: str) -> str:
@@ -227,22 +178,19 @@ class Translate:
 
         Args:
             text: The text to translate
-            target_language: Target language code (e.g., 'ja' for Japanese)
+            target_language: Target language code
 
         Returns:
             Translated text
-
-        Raises:
-            Exception: If translation fails
         """
-        if not GROQ_API_KEY:
-            logger.warning("No GROQ_API_KEY found, falling back to romanization")
-            if target_language == "ja":
-                return await Translate._romanize_to_japanese(text)
+        # Simple validation
+        if not text or not target_language:
             return text
 
+        if not GROQ_API_KEY:
+            raise ValueError("No Groq API key available")
+
         try:
-            # Construct the completion endpoint
             endpoint = f"{GROQ_API_BASE}/chat/completions"
 
             # Prepare messages for the LLM
@@ -250,9 +198,8 @@ class Translate:
                 {
                     "role": "system",
                     "content": (
-                        f"You are a translator specialized in translating names to {target_language}. "
-                        "Your task is to translate the input text to the target language. "
-                        "Respond with ONLY the translated text, without any additional explanation or comments."
+                        f"You are a translator that specializes in converting names to {target_language}. "
+                        "Respond with ONLY the translated name."
                     ),
                 },
                 {
@@ -265,7 +212,7 @@ class Translate:
             payload = {
                 "model": GROQ_MODEL,
                 "messages": messages,
-                "temperature": 0.2,  # Low temperature for more consistent translations
+                "temperature": 0.2,
                 "max_tokens": 150,
             }
 
@@ -276,55 +223,38 @@ class Translate:
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    endpoint, json=payload, headers=headers
+                    endpoint, json=payload, headers=headers, timeout=10
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(
-                            f"Groq API error (status {response.status}): {error_text}"
-                        )
+                        logger.error(f"Groq API error: {error_text}")
                         raise Exception(f"API error: {response.status}")
 
                     data = await response.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    return content
 
-                    # Extract the response
-                    if "choices" in data and len(data["choices"]) > 0:
-                        content = data["choices"][0]["message"]["content"].strip()
-                        return content
-                    else:
-                        logger.error(f"Unexpected API response: {data}")
-                        raise Exception("Invalid API response format")
-
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP error during translation: {str(e)}")
-            raise Exception(f"HTTP error: {str(e)}")
-        except asyncio.TimeoutError:
-            logger.error("Translation request timed out")
-            raise Exception("Request timed out")
-        except json.JSONDecodeError:
-            logger.error("Failed to decode JSON response")
-            raise Exception("Invalid JSON response")
         except Exception as e:
-            logger.error(f"Unexpected error during translation: {str(e)}")
+            logger.error(f"Translation request failed: {str(e)}")
             raise
 
     @staticmethod
     async def translate_text(text: str, target_language: str) -> str:
         """
-        Translate text to a specified target language.
+        Translate text to a specified language.
 
         Args:
             text: The text to translate
-            target_language: Target language code (e.g., 'ja' for Japanese)
+            target_language: Target language code
 
         Returns:
             Translated text
         """
         # For Japanese, use the specialized method
-        if target_language == "ja":
+        if target_language.lower() == "ja":
             return await Translate.to_japanese(text)
 
-        # For other languages, use the general translation method
+        # For other languages, use the general method
         # Check cache first
         cached_result = Translate._translation_cache.get(f"{target_language}:{text}")
         if cached_result:
@@ -332,21 +262,15 @@ class Translate:
 
         try:
             result = await Translate._translate_with_groq(text, target_language)
-
-            # Cache the result
             Translate._translation_cache.put(f"{target_language}:{text}", result)
-
             return result
-        except Exception as e:
-            logger.error(f"Translation to {target_language} failed: {str(e)}")
-            # Return the original text on failure
+        except Exception:
             return text
 
     @staticmethod
     async def _romanize_to_japanese(text: str) -> str:
         """
         Simple fallback method to create a Japanese-like version of text.
-        This is used when no translation API is available.
 
         Args:
             text: The text to romanize
@@ -402,6 +326,7 @@ class Translate:
             "wa": "わ",
             "wo": "を",
             "n": "ん",
+            # Additional mappings for more complete coverage
             "ga": "が",
             "gi": "ぎ",
             "gu": "ぐ",
@@ -427,39 +352,6 @@ class Translate:
             "pu": "ぷ",
             "pe": "ぺ",
             "po": "ぽ",
-            "kya": "きゃ",
-            "kyu": "きゅ",
-            "kyo": "きょ",
-            "sha": "しゃ",
-            "shu": "しゅ",
-            "sho": "しょ",
-            "cha": "ちゃ",
-            "chu": "ちゅ",
-            "cho": "ちょ",
-            "nya": "にゃ",
-            "nyu": "にゅ",
-            "nyo": "にょ",
-            "hya": "ひゃ",
-            "hyu": "ひゅ",
-            "hyo": "ひょ",
-            "mya": "みゃ",
-            "myu": "みゅ",
-            "myo": "みょ",
-            "rya": "りゃ",
-            "ryu": "りゅ",
-            "ryo": "りょ",
-            "gya": "ぎゃ",
-            "gyu": "ぎゅ",
-            "gyo": "ぎょ",
-            "ja": "じゃ",
-            "ju": "じゅ",
-            "jo": "じょ",
-            "bya": "びゃ",
-            "byu": "びゅ",
-            "byo": "びょ",
-            "pya": "ぴゃ",
-            "pyu": "ぴゅ",
-            "pyo": "ぴょ",
         }
 
         # Simple algorithm to convert text to Japanese-like sounds
@@ -470,16 +362,7 @@ class Translate:
         while i < len(text):
             found = False
 
-            # Try to match 3-character combinations first
-            if i < len(text) - 2:
-                three_chars = text[i : i + 3]
-                if three_chars in romanization_map:
-                    result += romanization_map[three_chars]
-                    i += 3
-                    found = True
-                    continue
-
-            # Try to match 2-character combinations next
+            # Try to match 2-character combinations first
             if i < len(text) - 1:
                 two_chars = text[i : i + 2]
                 if two_chars in romanization_map:
@@ -488,7 +371,7 @@ class Translate:
                     found = True
                     continue
 
-            # Try to match single characters
+            # If no 2-character match, try 1-character
             if text[i] in romanization_map:
                 result += romanization_map[text[i]]
                 i += 1
