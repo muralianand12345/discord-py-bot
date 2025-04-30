@@ -1,28 +1,20 @@
 """
 Utility class for translating text to different languages.
 
-This module provides translation functionality using Groq LLM API
+This module provides translation functionality using the OpenAI-compatible LLM API
 with proper error handling, caching and rate limiting.
 """
 
-import os
-import time
-import asyncio
-import aiohttp
-import json
 import logging
-from typing import Dict, Optional, Any
 from collections import OrderedDict
+from typing import Optional
 
+from utils.llm import LLM
 from utils.settings import (
-    GROQ_API_KEY,
-    GROQ_MODEL,
-    GROQ_API_BASE,
     TRANSLATION_CACHE_SIZE,
-    TRANSLATION_COOLDOWN_SECONDS,
     MAX_TRANSLATION_LENGTH,
-    MAX_REQUESTS_PER_MINUTE,
     USE_ROMANIZATION_FALLBACK,
+    PROMPTS,
 )
 
 logger = logging.getLogger("translation")
@@ -52,17 +44,21 @@ class LRUCache:
 class Translate:
     """Utility class for translating text to different languages."""
 
-    # Class-level cache and cooldown tracking
+    # Class-level cache and LLM instance
     _translation_cache = LRUCache(TRANSLATION_CACHE_SIZE)
-    _last_request_time = 0
-    _lock = asyncio.Lock()
-    _request_count = 0
-    _request_reset_time = 0
+    _llm = None
+
+    @classmethod
+    def _get_llm(cls):
+        """Get or create the LLM instance."""
+        if cls._llm is None:
+            cls._llm = LLM()
+        return cls._llm
 
     @staticmethod
     async def to_japanese(text: str) -> str:
         """
-        Translate text to Japanese using Groq LLM or fallback.
+        Translate text to Japanese using LLM or fallback.
 
         Args:
             text: The text to translate
@@ -90,49 +86,9 @@ class Translate:
         if cached_result:
             return cached_result
 
-        # Enforce cooldown between requests
-        async with Translate._lock:
-            # Handle rate limiting
-            current_time = time.time()
-
-            # Reset counter if a minute has passed
-            if current_time - Translate._request_reset_time >= 60:
-                Translate._request_count = 0
-                Translate._request_reset_time = current_time
-
-            # Check if we're at the rate limit
-            if Translate._request_count >= MAX_REQUESTS_PER_MINUTE:
-                # If romanization fallback is enabled, use it instead of waiting
-                if USE_ROMANIZATION_FALLBACK:
-                    logger.warning("Rate limit reached, using romanization fallback")
-                    result = await Translate._romanize_to_japanese(text)
-                    Translate._translation_cache.put(f"ja:{text}", result)
-                    return result
-
-                # Otherwise wait until we can make a request
-                wait_time = 60 - (current_time - Translate._request_reset_time)
-                if wait_time > 0:
-                    logger.warning(f"Rate limit reached. Waiting {wait_time:.1f}s")
-                    await asyncio.sleep(wait_time)
-                    Translate._request_count = 0
-                    Translate._request_reset_time = time.time()
-
-            # Enforce cooldown between individual requests
-            elapsed = current_time - Translate._last_request_time
-            if elapsed < TRANSLATION_COOLDOWN_SECONDS:
-                await asyncio.sleep(TRANSLATION_COOLDOWN_SECONDS - elapsed)
-
-            # Update last request time
-            Translate._last_request_time = time.time()
-            Translate._request_count += 1
-
         try:
-            # If no API key is available, use romanization
-            if not GROQ_API_KEY:
-                result = await Translate._romanize_to_japanese(text)
-            else:
-                # Try to translate with Groq
-                result = await Translate._translate_with_groq(text, "ja")
+            # Use the LLM to translate
+            result = await Translate._translate_with_llm(text, "ja")
 
             # Cache the result
             Translate._translation_cache.put(f"ja:{text}", result)
@@ -172,9 +128,9 @@ class Translate:
         return False
 
     @staticmethod
-    async def _translate_with_groq(text: str, target_language: str) -> str:
+    async def _translate_with_llm(text: str, target_language: str) -> str:
         """
-        Translate text using the Groq LLM API.
+        Translate text using the LLM API.
 
         Args:
             text: The text to translate
@@ -187,52 +143,33 @@ class Translate:
         if not text or not target_language:
             return text
 
-        if not GROQ_API_KEY:
-            raise ValueError("No Groq API key available")
-
         try:
-            endpoint = f"{GROQ_API_BASE}/chat/completions"
+            # Get the LLM instance
+            llm = Translate._get_llm()
+
+            # Get prompts from settings
+            system_message = PROMPTS["translation"]["system_message"].format(
+                language=target_language
+            )
+            user_message = PROMPTS["translation"]["user_message"].format(
+                language=target_language, text=text
+            )
 
             # Prepare messages for the LLM
             messages = [
                 {
                     "role": "system",
-                    "content": (
-                        f"You are a translator that specializes in converting names to {target_language}. "
-                        "Respond with ONLY the translated name."
-                    ),
+                    "content": system_message,
                 },
                 {
                     "role": "user",
-                    "content": f"Translate this name to {target_language}: {text}",
+                    "content": user_message,
                 },
             ]
 
-            # Prepare the request payload
-            payload = {
-                "model": GROQ_MODEL,
-                "messages": messages,
-                "temperature": 0.2,
-                "max_tokens": 150,
-            }
-
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    endpoint, json=payload, headers=headers, timeout=10
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Groq API error: {error_text}")
-                        raise Exception(f"API error: {response.status}")
-
-                    data = await response.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    return content
+            # Call the LLM
+            content = await llm.invoke(messages)
+            return content if content else text
 
         except Exception as e:
             logger.error(f"Translation request failed: {str(e)}")
@@ -261,7 +198,7 @@ class Translate:
             return cached_result
 
         try:
-            result = await Translate._translate_with_groq(text, target_language)
+            result = await Translate._translate_with_llm(text, target_language)
             Translate._translation_cache.put(f"{target_language}:{text}", result)
             return result
         except Exception:

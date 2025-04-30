@@ -26,6 +26,8 @@ EXTENSIONS_ENABLED = [
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")
 GROQ_API_BASE = os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1")
+LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "10.0"))
+LLM_COOLDOWN_SECONDS = float(os.getenv("LLM_COOLDOWN_SECONDS", "1.0"))
 
 # Translation settings
 TRANSLATION_CACHE_SIZE = int(os.getenv("TRANSLATION_CACHE_SIZE", "100"))
@@ -57,4 +59,15 @@ FEATURES = {
     "auto_translation": os.getenv("FEATURE_AUTO_TRANSLATION", "true").lower() == "true",
     "moderation": os.getenv("FEATURE_MODERATION", "true").lower() == "true",
     "fun_commands": os.getenv("FEATURE_FUN_COMMANDS", "true").lower() == "true",
+}
+
+# LLM Prompts
+PROMPTS = {
+    # Translation prompts
+    "translation": {
+        "system_message": "You are a translator that specializes in converting names to {language}. "
+        "Respond with ONLY the translated name.",
+        "user_message": "Translate this name to {language}: {text}",
+    },
+    # Add more prompts for other LLM-based features as needed
 }
