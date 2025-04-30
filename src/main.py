@@ -3,17 +3,19 @@ Main entry point for the Discord bot.
 """
 
 import os
-import sys
 import logging
-import asyncio
 from dotenv import load_dotenv
 
 from utils.logging_manager import LoggingManager
 from utils.settings import BOT_TOKEN, LOG_LEVEL, LOG_TO_FILE, LOG_FILE_PATH
 from bot import bot
 
-# Ensure logs directory exists
+# Ensure logs and data directories exist
 os.makedirs("logs", exist_ok=True)
+os.makedirs("data", exist_ok=True)
+
+# Ensure cogs directory exists
+os.makedirs("src/cogs", exist_ok=True)
 
 # Load environment variables
 load_dotenv()
@@ -38,11 +40,18 @@ def main():
 
     try:
         logger.info("Starting bot...")
+
+        # Print summary of loaded modules
+        logger.info(f"Bot prefix: {bot.command_prefix}")
+        logger.info(f"Starting version: {bot.app_version}")
+        logger.info(f"Loading extensions: {', '.join(bot.startup_extensions)}")
+
+        # Start the bot
         bot.run(BOT_TOKEN)
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
     except Exception as e:
-        logger.critical(f"Failed to start bot: {str(e)}")
+        logger.critical(f"Failed to start bot: {str(e)}", exc_info=True)
 
 
 if __name__ == "__main__":
