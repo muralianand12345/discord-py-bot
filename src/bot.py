@@ -2,11 +2,11 @@
 Enhanced Discord bot with modular command structure and friendly personality.
 """
 
+import asyncio
 import logging
 import platform
-import asyncio
 import random
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands, tasks
@@ -30,9 +30,13 @@ logger = LoggingManager.setup_logger(
     file_mode="a",
 )
 
-# Configure intents with better defaults for engagement
-intents = discord.Intents.all()  # Enable all intents for maximum engagement
-intents.typing = False  # Disable typing events to reduce processing overhead
+# Configure intents with necessary permissions
+intents = discord.Intents.default()
+intents.members = True  # Needed for welcome messages, member tracking
+intents.message_content = True  # Needed for commands and chatbot
+intents.guilds = True  # For guild information
+intents.reactions = True  # For reaction-based features
+intents.typing = False  # Not needed, reduces event processing
 
 
 class CustomBot(commands.Bot):

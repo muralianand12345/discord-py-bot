@@ -56,8 +56,8 @@ A friendly Discord bot with multiple features including conversational AI, nickn
 1. Clone this repository:
 
    ```bash
-   git clone git@github.com:muralianand12345/discord-bot.git
-   cd discord-bot
+   git clone git@github.com:muralianand12345/discord-py-bot.git
+   cd discord-py-bot
    ```
 
 2. Set up a virtual environment:
