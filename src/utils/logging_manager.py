@@ -1,9 +1,5 @@
-"""
-Utility class for setting up logging configurations.
-"""
-
-import logging
 import os
+import logging
 from typing import Optional
 
 
