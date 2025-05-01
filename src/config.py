@@ -11,9 +11,6 @@ class BOT:
         LOG_TO_FILE = True
         LOG_LEVEL = "INFO"
 
-    class DB:
-        DB_PATH = "data/bot.db"
-
     class WELCOME:
         WELCOME_CHANNEL_ID = "1367170633120743465"
         ROLE_ID = "1366827175436746782"
@@ -40,8 +37,8 @@ class LLM:
 
     class CHATBOT:
         API_KEY = os.getenv("LLM_API_KEY_4")
-        API_URL = os.getenv("LLM_API_URL_4", "https://api.openai.com/v1/")
-        MODEL = os.getenv("LLM_MODEL_4", "gpt-4o-mini-search-preview-2025-03-11")
+        API_URL = os.getenv("LLM_API_URL_4", None)  # https://api.perplexity.ai
+        MODEL = os.getenv("LLM_MODEL_4", "gpt-4o-search-preview")  # sonar-pro
 
         class BOT_CONFIG:
             BOT_NAME = "Leo"

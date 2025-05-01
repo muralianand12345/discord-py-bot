@@ -105,8 +105,16 @@ async def on_message(message: discord.Message):
             user_top_role,
         )
 
-    # Send response
+    # Send response, ensuring it doesn't exceed Discord's character limit
     if response:
+        # Truncate response if it's too long (Discord limit is 2000 characters)
+        if len(response) > 1990:  # Leave some buffer
+            truncated_response = response[:1990] + "..."
+            logger.warning(
+                f"Response was truncated from {len(response)} characters to 1990 characters"
+            )
+            response = truncated_response
+
         try:
             sent_message = await message.reply(response)
         except discord.NotFound:
@@ -118,7 +126,18 @@ async def on_message(message: discord.Message):
             return
         except discord.HTTPException as e:
             logger.error(f"Failed to send message: {str(e)}")
+
+            # Try to send a shorter message if we still encountered an error
+            if len(response) > 1000:
+                try:
+                    short_response = "I had a lot to say, but Discord won't let me send such a long message. Here's a shorter response:"
+                    short_response += "\n\n" + response[:900] + "..."
+                    sent_message = await message.reply(short_response)
+                except Exception as e2:
+                    logger.error(f"Failed to send shortened message: {str(e2)}")
+                    return
             return
+
         # Add bot response to history
         chat_histories[channel_id].append(
             {
@@ -178,9 +197,13 @@ async def generate_response(
             - Top Role: {user_top_role}
             - Roles: {roles_info}
             
-            Keep your responses concise, friendly, and helpful.
-            Be conversational but brief (1-3 sentences unless a longer explanation is needed).
-            Keep your conversation in English unless requested otherwise.
+            IMPORTANT GUIDELINES:
+            - Keep your responses concise and friendly
+            - Be conversational but brief (1-3 sentences unless a longer explanation is needed)
+            - Keep your conversation in English unless requested otherwise
+            - Make sure responses are formatted as per Discord's markdown rules
+            - Keep responses under 1,800 characters to avoid Discord message length limitations
+            - Use discord features like **bold**, *italic*, `code`, ```code blocks``` appropriately
             
             Track users by their unique user ID ({user_id}), not just their display name, 
             as users may change their display names but will keep the same user ID.
@@ -218,7 +241,7 @@ async def generate_response(
         # Generate response
         response = await llm_client.invoke(
             messages=messages,
-            max_tokens=250,
+            max_tokens=200,  # Reduced to help keep responses shorter
         )
 
         return response.strip()
