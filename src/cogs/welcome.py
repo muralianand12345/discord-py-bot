@@ -212,19 +212,11 @@ class WelcomeCog(commands.Cog, name="Welcome"):
 
             # Calculate time on server if possible
             if member.joined_at:
-                time_on_server = discord.utils.utcnow() - member.joined_at
-                days = time_on_server.days
-                hours, remainder = divmod(time_on_server.seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
-
-                time_str = ""
-                if days > 0:
-                    time_str += f"{days} day{'s' if days != 1 else ''} "
-                if hours > 0 or days > 0:
-                    time_str += f"{hours} hour{'s' if hours != 1 else ''} "
-                time_str += f"{minutes} minute{'s' if minutes != 1 else ''}"
-
-                embed.add_field(name="Time on Server", value=time_str, inline=True)
+                embed.add_field(
+                    name="Time on Server",
+                    value=f"<t:{int(member.joined_at.timestamp())}:R>",
+                    inline=True,
+                )
 
             embed.add_field(
                 name="Member Count", value=f"{member.guild.member_count}", inline=True
