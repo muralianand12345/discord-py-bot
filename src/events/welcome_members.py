@@ -19,6 +19,17 @@ async def on_member_join(member):
         f"Member joined: {member.name}#{member.discriminator} (ID: {member.id})"
     )
 
+    # Translate the member's name to Japanese
+    translated_name = await translate_name_to_japanese(member.name)
+
+    # Set the new nickname
+    try:
+        if translated_name and translated_name != member.name:
+            await member.edit(nick=translated_name)
+            logger.info(f"Changed nickname for {member.name} to {translated_name}")
+    except Exception as e:
+        logger.error(f"Failed to set nickname for {member.name}: {str(e)}")
+
     # Assign the default role if configured
     if BOT.WELCOME.ROLE_ID:
         try:
@@ -37,7 +48,7 @@ async def on_member_join(member):
             channel = member.guild.get_channel(int(BOT.WELCOME.WELCOME_CHANNEL_ID))
             if channel:
                 # Create and send welcome embed
-                embed = await create_welcome_embed(member)
+                embed = await create_welcome_embed(member, translated_name)
                 await channel.send(content=f"Welcome {member.mention}!", embed=embed)
             else:
                 logger.warning(
@@ -47,11 +58,11 @@ async def on_member_join(member):
             logger.error(f"Failed to send welcome message for {member.name}: {str(e)}")
 
 
-async def create_welcome_embed(member):
+async def create_welcome_embed(member, translated_name=None):
     """Creates a custom welcome embed for the new member."""
     embed = discord.Embed(
         title=f"Welcome to {member.guild.name}! 🎉",
-        description=await generate_welcome_message(member),
+        description=await generate_welcome_message(member, translated_name),
         color=0x5CDBF0,  # Light blue color
     )
 
@@ -59,13 +70,19 @@ async def create_welcome_embed(member):
     embed.add_field(
         name="Member", value=f"{member.name} ({member.mention})", inline=True
     )
+
+    # Add translated name if available
+    if translated_name and translated_name != member.name:
+        embed.add_field(name="Japanese Name", value=translated_name, inline=True)
+
     embed.add_field(
         name="Account Created",
         value=f"<t:{int(member.created_at.timestamp())}:R>",
         inline=True,
     )
+
     embed.add_field(
-        name="Member Count", value=f"{member.guild.member_count} members", inline=True
+        name="Member Count", value=f"{member.guild.member_count} members", inline=False
     )
 
     # Add server image or member avatar
@@ -83,7 +100,7 @@ async def create_welcome_embed(member):
     return embed
 
 
-async def generate_welcome_message(member):
+async def generate_welcome_message(member, translated_name=None):
     """Generate a personalized welcome message using LLM if available."""
     # Default welcome messages as fallback
     default_messages = [
@@ -103,12 +120,19 @@ async def generate_welcome_message(member):
                 model=LLM.WELCOME.MODEL,
             )
 
+            name_info = (
+                f"Their name has been translated to Japanese as '{translated_name}'."
+                if translated_name and translated_name != member.name
+                else ""
+            )
+
             prompt = LLMMessage(
                 role="user",
                 content=f"""Generate a friendly, warm welcome message for a new Discord user named {member.name} 
                 who just joined the server {member.guild.name}.
+                {name_info}
                 The message should be 2-3 sentences, conversational, and welcoming.
-                Don't use hashtags or emojis.
+                Don't use hashtags or emojis and only English.
                 """,
             )
 
@@ -124,3 +148,130 @@ async def generate_welcome_message(member):
 
     # Fallback to random default message
     return random.choice(default_messages)
+
+
+async def translate_name_to_japanese(name):
+    """Translates a name to Japanese using LLM with retry and fallback."""
+    # Skip translation if name is already in Japanese or contains non-latin characters
+    if any(ord(char) > 127 for char in name):
+        return name
+
+    if LLM.TRANSLATOR.API_KEY:
+        try:
+            # Create LLM client with retry settings
+            llm_client = LLMClient(
+                api_key=LLM.TRANSLATOR.API_KEY,
+                api_url=LLM.TRANSLATOR.API_URL,
+                model=LLM.TRANSLATOR.MODEL,
+                max_retries=3,
+                retry_base_delay=1.0,
+                retry_max_delay=8.0,
+                request_timeout=10.0,
+            )
+
+            prompt = LLMMessage(
+                role="user",
+                content=f"""Translate the name "{name}" to Japanese.
+                If the name has a common Japanese equivalent, use that.
+                Otherwise, use phonetic katakana that sounds similar.
+                Just provide the translated name without explanation.
+                """,
+            )
+
+            # Define a fallback function that returns romanized Japanese if all else fails
+            def get_simple_fallback():
+                # Very simple romanization fallback
+                katakana_map = {
+                    "a": "ア",
+                    "i": "イ",
+                    "u": "ウ",
+                    "e": "エ",
+                    "o": "オ",
+                    "ka": "カ",
+                    "ki": "キ",
+                    "ku": "ク",
+                    "ke": "ケ",
+                    "ko": "コ",
+                    "sa": "サ",
+                    "shi": "シ",
+                    "su": "ス",
+                    "se": "セ",
+                    "so": "ソ",
+                    "ta": "タ",
+                    "chi": "チ",
+                    "tsu": "ツ",
+                    "te": "テ",
+                    "to": "ト",
+                    "na": "ナ",
+                    "ni": "ニ",
+                    "nu": "ヌ",
+                    "ne": "ネ",
+                    "no": "ノ",
+                    "ha": "ハ",
+                    "hi": "ヒ",
+                    "fu": "フ",
+                    "he": "ヘ",
+                    "ho": "ホ",
+                    "ma": "マ",
+                    "mi": "ミ",
+                    "mu": "ム",
+                    "me": "メ",
+                    "mo": "モ",
+                    "ya": "ヤ",
+                    "yu": "ユ",
+                    "yo": "ヨ",
+                    "ra": "ラ",
+                    "ri": "リ",
+                    "ru": "ル",
+                    "re": "レ",
+                    "ro": "ロ",
+                    "wa": "ワ",
+                    "wo": "ヲ",
+                    "n": "ン",
+                }
+
+                # Simple romanization - not perfect but a decent fallback
+                result = ""
+                name_lower = name.lower()
+                i = 0
+                while i < len(name_lower):
+                    for syllable in sorted(katakana_map.keys(), key=len, reverse=True):
+                        if name_lower[i:].startswith(syllable):
+                            result += katakana_map[syllable]
+                            i += len(syllable)
+                            break
+                    else:
+                        # If no match, just skip this character
+                        i += 1
+
+                # If result is empty, just return the original name
+                return result if result else name
+
+            # Use the with_fallback method to automatically handle retries and fallback
+            response = await llm_client.with_fallback(
+                messages=[prompt],
+                fallback_fn=get_simple_fallback,
+                temperature=0.3,
+                max_tokens=50,
+            )
+
+            # Clean up the response
+            if response:
+                # Remove any explanations, just get the name
+                response = response.strip()
+                # Remove any quotes that might be in the response
+                response = response.replace('"', "").replace("'", "")
+                # If response is too long, trim it
+                if len(response) > 15:
+                    # Try to find where the actual name ends
+                    for char in [".", ",", "\n", " "]:
+                        if char in response:
+                            response = response.split(char)[0]
+
+                return response
+
+        except Exception as e:
+            logger.error(f"Failed to translate name using LLM: {str(e)}")
+
+    # Return original name if translation fails
+    return name

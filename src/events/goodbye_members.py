@@ -94,7 +94,7 @@ async def generate_goodbye_message(member):
                 content=f"""Generate a brief, thoughtful goodbye message for a Discord user named {member.name} 
                 who just left the server {member.guild.name}.
                 The message should be 1-2 sentences, respectful, and wishing them well.
-                Don't use hashtags or emojis.
+                Don't use hashtags or emojis and only English.
                 """,
             )
 

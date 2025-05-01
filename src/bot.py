@@ -1,4 +1,3 @@
-import os
 import asyncio
 import discord
 import logging
@@ -44,29 +43,8 @@ class CustomBot(commands.Bot):
 
     async def setup_hook(self):
         """Initialize bot extensions and load event listeners."""
-        await self.load_extensions()
         await self.load_event_handlers()
         logger.info("Bot setup complete.")
-
-    async def load_extensions(self):
-        """Load all enabled cog extensions."""
-        extensions_enabled = os.getenv("EXTENSIONS_ENABLED", "").split(",")
-        extensions_enabled = [ext.strip() for ext in extensions_enabled if ext.strip()]
-
-        if not extensions_enabled:
-            logger.warning(
-                "No extensions enabled in EXTENSIONS_ENABLED environment variable."
-            )
-            return
-
-        logger.info(f"Loading extensions: {', '.join(extensions_enabled)}")
-
-        for extension in extensions_enabled:
-            try:
-                await self.load_extension(f"cogs.{extension}")
-                logger.info(f"Loaded extension: {extension}")
-            except Exception as e:
-                logger.error(f"Failed to load extension {extension}: {str(e)}")
 
     async def load_event_handlers(self):
         """Load all event handlers from the events directory."""
