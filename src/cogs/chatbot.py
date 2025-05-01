@@ -5,20 +5,20 @@ Chatbot functionality for Discord bot with enhanced intelligence, context awaren
 import asyncio
 import datetime
 import logging
-import discord
-import re
 import random
+import re
 import traceback
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+import discord
 from discord.ext import commands
 
-from utils.llm import LLM
 from utils.db_manager import DatabaseManager
+from utils.llm import LLM
 from utils.settings import (
-    CHATBOT_ENABLED,
     CHATBOT_CHANNELS,
+    CHATBOT_ENABLED,
     CHATBOT_MAX_HISTORY,
-    CHATBOT_TEMPERATURE,
     CHATBOT_MAX_TOKENS,
     CHATBOT_NAME,
     PROMPTS,
@@ -526,13 +526,9 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             {"role": "user", "content": f"{current_user} said: {current_message}"}
         )
 
-        # Use slightly lower temperature for more coherent responses
-        adjusted_temp = 0.5
-
         try:
-            response = await self.llm.invoke(
-                messages, temperature=adjusted_temp, max_tokens=CHATBOT_MAX_TOKENS
-            )
+            # Note: Removed temperature parameter as it's not supported by Groq
+            response = await self.llm.invoke(messages, max_tokens=CHATBOT_MAX_TOKENS)
 
             return (
                 response
@@ -1098,7 +1094,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                 name="Max History", value=str(CHATBOT_MAX_HISTORY), inline=True
             )
             embed.add_field(
-                name="Temperature", value=str(CHATBOT_TEMPERATURE), inline=True
+                name="Max Tokens", value=str(CHATBOT_MAX_TOKENS), inline=True
             )
             embed.add_field(name="Active Channels", value=channels_str, inline=False)
 

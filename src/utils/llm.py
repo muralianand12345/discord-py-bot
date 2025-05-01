@@ -5,22 +5,21 @@ This module provides a wrapper around LLM APIs using the OpenAI client,
 with proper error handling and rate limiting.
 """
 
-import os
-import time
 import asyncio
 import logging
-from openai import OpenAI
+import time
 from openai import AsyncOpenAI
+from openai import OpenAI
 from typing import Dict, List, Optional
 
 # Local imports
 from utils.settings import (
+    GROQ_API_BASE,
     GROQ_API_KEY,
     GROQ_MODEL,
-    GROQ_API_BASE,
-    MAX_REQUESTS_PER_MINUTE,
-    LLM_REQUEST_TIMEOUT,
     LLM_COOLDOWN_SECONDS,
+    LLM_REQUEST_TIMEOUT,
+    MAX_REQUESTS_PER_MINUTE,
 )
 
 logger = logging.getLogger("llm")
@@ -69,18 +68,17 @@ class LLM:
         return cls._sync_client
 
     async def invoke(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.2,
-        max_tokens: int = 150,
+        self, messages: List[Dict[str, str]], max_tokens: int = 150, **kwargs
     ) -> Optional[str]:
         """
         Invoke the LLM with a list of messages using AsyncOpenAI client.
 
+        Note: Removed temperature parameter as it's not supported by Groq API.
+
         Args:
             messages: List of message objects with 'role' and 'content'
-            temperature: Sampling temperature (0-1)
             max_tokens: Maximum tokens to generate
+            **kwargs: Additional parameters to pass to the API (except temperature)
 
         Returns:
             Generated text response or None if there's an error
@@ -96,12 +94,16 @@ class LLM:
             # Get the async client
             client = self.get_async_client()
 
+            # Remove temperature if present in kwargs
+            if "temperature" in kwargs:
+                logger.warning(
+                    "Temperature parameter not supported by Groq API, removing"
+                )
+                kwargs.pop("temperature")
+
             # Create the chat completion
             response = await client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                model=self.model, messages=messages, max_tokens=max_tokens, **kwargs
             )
 
             # Extract and return the content
@@ -116,18 +118,17 @@ class LLM:
             raise
 
     def invoke_sync(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.2,
-        max_tokens: int = 150,
+        self, messages: List[Dict[str, str]], max_tokens: int = 150, **kwargs
     ) -> Optional[str]:
         """
         Invoke the LLM with a list of messages using synchronous OpenAI client.
 
+        Note: Removed temperature parameter as it's not supported by Groq API.
+
         Args:
             messages: List of message objects with 'role' and 'content'
-            temperature: Sampling temperature (0-1)
             max_tokens: Maximum tokens to generate
+            **kwargs: Additional parameters to pass to the API (except temperature)
 
         Returns:
             Generated text response or None if there's an error
@@ -140,12 +141,16 @@ class LLM:
             # Get the synchronous client
             client = self.get_sync_client()
 
+            # Remove temperature if present in kwargs
+            if "temperature" in kwargs:
+                logger.warning(
+                    "Temperature parameter not supported by Groq API, removing"
+                )
+                kwargs.pop("temperature")
+
             # Create the chat completion
             response = client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                model=self.model, messages=messages, max_tokens=max_tokens, **kwargs
             )
 
             # Extract and return the content

@@ -11,10 +11,10 @@ from typing import Optional
 
 from utils.llm import LLM
 from utils.settings import (
-    TRANSLATION_CACHE_SIZE,
     MAX_TRANSLATION_LENGTH,
-    USE_ROMANIZATION_FALLBACK,
     PROMPTS,
+    TRANSLATION_CACHE_SIZE,
+    USE_ROMANIZATION_FALLBACK,
 )
 
 logger = logging.getLogger("translation")
@@ -167,7 +167,7 @@ class Translate:
                 },
             ]
 
-            # Call the LLM
+            # Call the LLM - removed temperature parameter as it's not supported by Groq
             content = await llm.invoke(messages)
             return content if content else text
 
