@@ -45,4 +45,6 @@ class LLM:
 
         class BOT_CONFIG:
             BOT_NAME = "Leo"
+            CHANNEL_ID = "1367584360198570064"
             CHATBOT_MAX_HISTORY = 10
+            CHATBOT_HISTORY_FILE = "data/chatbot_history.json"

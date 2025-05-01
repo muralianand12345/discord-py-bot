@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 uv.lock
 data/bot.db
+data/chatbot_history.json
