@@ -1,5 +1,5 @@
 """
-Chatbot functionality for Discord bot with enhanced intelligence, context awareness, and reliability.
+Chatbot functionality for Discord bot with friendly, conversational personality.
 """
 
 import asyncio
@@ -8,6 +8,7 @@ import logging
 import random
 import re
 import traceback
+from collections import deque
 from typing import Dict, List, Optional, Set, Tuple
 
 import discord
@@ -21,12 +22,13 @@ from utils.settings import (
     CHATBOT_MAX_HISTORY,
     CHATBOT_MAX_TOKENS,
     CHATBOT_NAME,
+    CHATBOT_PERSONALITY,
     PROMPTS,
 )
 
 
 class ChatbotCog(commands.Cog, name="Chatbot"):
-    """AI-powered chatbot for natural group conversations in channels."""
+    """Friendly AI-powered chatbot for natural conversations in Discord channels."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -35,7 +37,6 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         self.db = DatabaseManager()
         self.is_enabled = CHATBOT_ENABLED
 
-        # Critical: Ensure channels are properly initialized from settings
         # Convert any string IDs to integers if needed
         self.target_channels = []
         for channel in CHATBOT_CHANNELS:
@@ -44,15 +45,45 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             elif isinstance(channel, int):
                 self.target_channels.append(channel)
 
-        # Add extra diagnostic log
         self.logger.info(f"Chatbot initialized with channels: {self.target_channels}")
 
-        self.typing_lock = {}  # Tracks channels where the bot is "typing"
-        self.recent_questions = {}  # Tracks recent questions to detect repeats
-        self.recent_topics = {}  # Tracks conversation topics per channel
-        self.user_info = {}  # Tracks information about users
+        # User interaction tracking
+        self.typing_lock = {}  # Tracks channels where bot is "typing"
+        self.recent_questions = {}  # Tracks recent questions to avoid repetition
+        self.conversation_topics = {}  # Tracks topics per channel
+        self.user_info = {}  # Stores user information for personalization
+        self.recent_interactions = {}  # Tracks channel activity recency
 
-        # Add message handling statistics for diagnostics
+        # Recent messages queue per channel (for quick access without DB)
+        self.message_queue = {}
+
+        # Personality traits - adjustable based on CHATBOT_PERSONALITY setting
+        self.personality = {
+            "friendliness": 0.9,  # Very friendly
+            "humor": 0.7,  # Moderately humorous
+            "helpfulness": 0.8,  # Quite helpful
+            "chattiness": 0.7,  # Moderately chatty
+            "formality": 0.3,  # Informal
+        }
+
+        # Parsing personality traits
+        if CHATBOT_PERSONALITY:
+            traits = CHATBOT_PERSONALITY.lower().split(",")
+            for trait in traits:
+                trait = trait.strip()
+                if "friendly" in trait:
+                    self.personality["friendliness"] = 0.9
+                if "helpful" in trait:
+                    self.personality["helpfulness"] = 0.9
+                if "humor" in trait or "funny" in trait:
+                    self.personality["humor"] = 0.8
+                if "meme" in trait:
+                    self.personality["humor"] = 0.9
+                    self.personality["formality"] = 0.2
+                if "formal" in trait:
+                    self.personality["formality"] = 0.7
+
+        # Statistics for monitoring
         self.stats = {
             "messages_received": 0,
             "responses_sent": 0,
@@ -62,7 +93,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Handle incoming messages for the chatbot with improved reliability."""
+        """Handle incoming messages for the chatbot with friendly personality."""
         # Skip messages from bots to avoid loops
         if message.author.bot:
             return
@@ -88,7 +119,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             self.stats["messages_received"] += 1
             self.stats["last_active"] = datetime.datetime.utcnow()
 
-            # Log the incoming message to help with debugging
+            # Log the incoming message
             self.logger.info(
                 f"Received message from {message.author.display_name}: '{content}'"
             )
@@ -96,15 +127,30 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             # Store user info for personalization
             self._update_user_info(message.author)
 
+            # Add message to queue for this channel
+            channel_id = message.channel.id
+            if channel_id not in self.message_queue:
+                self.message_queue[channel_id] = deque(maxlen=10)
+
+            self.message_queue[channel_id].append(
+                {
+                    "author": message.author.display_name,
+                    "author_id": message.author.id,
+                    "content": content,
+                    "timestamp": datetime.datetime.utcnow(),
+                }
+            )
+
+            # Mark channel as recently active
+            self.recent_interactions[channel_id] = datetime.datetime.utcnow()
+
             # Check if message is a repeat
             is_repeat = self._check_repeated_question(
                 message.channel.id, message.author.id, content
             )
 
-            # Calculate if we should respond - IMPORTANT CHANGE: MORE RELIABLE RESPONSE DECISION
-            should_respond = self._should_respond_enhanced(
-                message.channel.id, message, content
-            )
+            # Calculate if we should respond
+            should_respond = self._should_respond(message.channel.id, message, content)
 
             if not should_respond:
                 self.logger.info(
@@ -114,8 +160,9 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
 
             # Start typing indicator with variable duration based on message complexity
             typing_duration = min(
-                1.5 + (len(content) * 0.01), 3.0
-            )  # Between 1.5-3 seconds
+                1.2 + (len(content) * 0.008),
+                2.5,  # Slightly faster response time for friendly bot
+            )
             await self._set_typing(message.channel, True, typing_duration)
 
             try:
@@ -140,41 +187,10 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                     }
                 )
 
-                # Response retry mechanism with backoff
-                max_retries = 2
-                response = None
-
-                for attempt in range(max_retries + 1):
-                    try:
-                        # Generate a response with enhanced context
-                        response = await self._generate_intelligent_response_with_retry(
-                            conversation_history, message.author, is_repeat=is_repeat
-                        )
-
-                        # Check for response quality
-                        if not self._is_valid_response(response, content):
-                            if attempt < max_retries:
-                                self.logger.warning(
-                                    f"Generated invalid response on attempt {attempt+1}, retrying..."
-                                )
-                                continue
-                            response = self._get_fallback_response(content)
-
-                        # Quality checks passed, break out of retry loop
-                        break
-
-                    except Exception as e:
-                        self.logger.error(
-                            f"Error on response attempt {attempt+1}: {str(e)}"
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(0.5 * (attempt + 1))  # Backoff delay
-                        else:
-                            response = self._get_fallback_response(content)
-
-                # Ensure we have a valid response
-                if not response:
-                    response = self._get_fallback_response(content)
+                # Generate the response with retry logic
+                response = await self._generate_friendly_response(
+                    conversation_history, message.author, is_repeat
+                )
 
                 # Clean the response
                 response = self._clean_response(response, conversation_history)
@@ -185,7 +201,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                     {
                         "role": "assistant",
                         "username": CHATBOT_NAME,
-                        "content": response,  # Store unformatted for future context
+                        "content": response,
                         "timestamp": current_time,
                         "user_id": self.bot.user.id,
                         "channel_id": message.channel.id,
@@ -197,13 +213,11 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                     message.channel.id, conversation_history
                 )
 
-                # Send the response with variable delay
-                delay = random.uniform(
-                    0.3, 0.8
-                )  # Reduced delay for better responsiveness
+                # Add a small, natural-feeling delay before responding
+                delay = random.uniform(0.3, 0.7)  # Slightly faster for friendly vibes
                 await asyncio.sleep(delay)
 
-                # Send the message with error handling
+                # Send the message
                 try:
                     # Split very long responses into multiple messages for more natural flow
                     if len(response) > 1500:
@@ -223,11 +237,8 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
 
                 except discord.HTTPException as e:
                     self.logger.error(f"Failed to send message: {str(e)}")
-                    # Try one more time with a simpler message if the send fails
                     try:
-                        await message.channel.send(
-                            "Hmm, had trouble sending my response. Let me try again..."
-                        )
+                        # Simplified fallback
                         await message.channel.send(
                             response[:1900] + "..."
                             if len(response) > 1900
@@ -241,27 +252,27 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                         self.stats["response_failures"] += 1
 
             except Exception as e:
-                self.logger.error(f"Critical error in message handling: {str(e)}")
+                self.logger.error(f"Error in message handling: {str(e)}")
                 self.logger.error(traceback.format_exc())
                 self.stats["response_failures"] += 1
 
-                # Always try to respond even on error
+                # Friendly error message
                 try:
                     await message.channel.send(
-                        "Sorry, I got distracted for a second there. What were we talking about?"
+                        "Whoops, I got distracted for a second there! What were we talking about?"
                     )
                 except:
-                    pass  # Last resort - if we can't send anything, just continue
+                    pass
 
             finally:
                 # Always stop typing indicator
                 await self._set_typing(message.channel, False)
 
-    def _should_respond_enhanced(
+    def _should_respond(
         self, channel_id: int, message: discord.Message, content: str
     ) -> bool:
         """
-        Enhanced decision mechanism for when to respond, with higher responsiveness.
+        Determine whether to respond to a message with friendly personality influence.
 
         Args:
             channel_id: The channel ID
@@ -271,65 +282,77 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         Returns:
             Boolean indicating whether to respond
         """
-        # First, let's handle direct questions - ALWAYS respond to these
+        # Always respond to direct questions or bot mentions
         if re.search(r"\?$", content) or re.search(
             r"\b(what|how|why|when|who|where|is|are|can|could|would|should|did)\b",
             content.lower(),
         ):
             return True
 
-        # Always respond to direct addresses (mentioning the bot's name or variants)
-        if (
-            CHATBOT_NAME.lower() in content.lower()
-            or "bot" in content.lower()
-            or "lee" in content.lower()
-        ):
+        # Always respond if mentioned directly
+        bot_name_variations = [
+            CHATBOT_NAME.lower(),
+            "bot",
+            self.bot.user.name.lower() if self.bot.user else "",
+        ]
+
+        if any(name in content.lower() for name in bot_name_variations if name):
             return True
 
-        # Get conversation history
-        history = self._get_recent_messages(channel_id)
+        # Get recent messages for context
+        recent_msgs = self._get_recent_messages(channel_id)
 
-        # If this is the first message in the channel, respond
-        if not history:
+        # First message in channel - respond to kick things off
+        if not recent_msgs:
             return True
 
-        # If the message is very short (like "hi", "hello"), always respond
-        if len(content) <= 5:
+        # Friendly bots respond to short greetings
+        greeting_patterns = [
+            r"\b(hi|hey|hello|sup|yo|hiya|howdy|greetings)\b",
+            r"^(good morning|good afternoon|good evening)$",
+        ]
+
+        if any(re.search(pattern, content.lower()) for pattern in greeting_patterns):
             return True
 
-        # If bot was the last speaker, be more selective about responding again
-        if history and history[-1].get("user_id") == self.bot.user.id:
+        # Let's not respond if we just sent a message (avoid double-responses)
+        if recent_msgs and recent_msgs[-1].get("user_id") == self.bot.user.id:
             # Check time since last bot message
             try:
                 last_time = datetime.datetime.strptime(
-                    history[-1].get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
+                    recent_msgs[-1].get("timestamp", ""), "%Y-%m-%d %H:%M:%S"
                 )
                 current_time = datetime.datetime.utcnow()
                 time_diff = (current_time - last_time).total_seconds()
 
-                # If it's been less than a few seconds and not a direct question/mention, don't respond
-                # This prevents double-responses but allows for quick follow-ups to questions
-                if time_diff < 10 and not any(
-                    [
-                        CHATBOT_NAME.lower() in content.lower(),
-                        "bot" in content.lower(),
-                        "lee" in content.lower(),
-                        re.search(r"\?$", content),
-                        re.search(
-                            r"\b(what|how|why|when|who|where|is|are|can|could|would|should|did)\b",
-                            content.lower(),
-                        ),
-                    ]
-                ):
+                # If very recent and not a direct question/mention, don't respond
+                if time_diff < 8:  # Slightly shorter wait time for friendly bot
                     return False
             except ValueError:
-                # If datetime parsing fails, just continue (shouldn't happen with proper formatting)
                 pass
 
-        # IMPORTANT: Higher base response chance - 80% for most messages
-        response_chance = 0.8
+        # Friendly bots have higher response rates, influenced by personality settings
+        # Base chance + influence from the friendliness/chattiness settings
+        base_chance = 0.5
+        friendliness_factor = self.personality["friendliness"] * 0.3  # Up to 0.3 bonus
+        chattiness_factor = self.personality["chattiness"] * 0.2  # Up to 0.2 bonus
 
-        # Generate random number and compare with response chance
+        response_chance = base_chance + friendliness_factor + chattiness_factor
+
+        # Additional bonus for short messages which are easier to respond to
+        if len(content) < 15:
+            response_chance += 0.15
+
+        # Gentle decay for very inactive channels
+        if channel_id in self.recent_interactions:
+            last_interaction = self.recent_interactions[channel_id]
+            hours_since = (
+                datetime.datetime.utcnow() - last_interaction
+            ).total_seconds() / 3600
+
+            if hours_since > 12:  # Been quiet for over 12 hours
+                response_chance += 0.2  # More likely to respond to revive conversation
+
         return random.random() < response_chance
 
     def _check_repeated_question(
@@ -394,29 +417,29 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
                 "first_seen": datetime.datetime.utcnow(),
                 "roles": [role.name for role in user.roles if role.name != "@everyone"],
                 "mentioned_topics": set(),
-                "interactions": 0,
+                "interaction_count": 0,
+                "last_interaction": datetime.datetime.utcnow(),
             }
-
-        # Update interaction count
-        self.user_info[user.id]["interactions"] += 1
-
-        # Update roles in case they changed
-        self.user_info[user.id]["roles"] = [
-            role.name for role in user.roles if role.name != "@everyone"
-        ]
+        else:
+            # Update existing user info
+            self.user_info[user.id]["interaction_count"] += 1
+            self.user_info[user.id]["last_interaction"] = datetime.datetime.utcnow()
+            self.user_info[user.id]["roles"] = [
+                role.name for role in user.roles if role.name != "@everyone"
+            ]
 
     def _update_conversation_topics(self, channel_id: int, content: str):
         """
-        Extract and track conversation topics to maintain better context.
+        Extract and track conversation topics for context awareness.
 
         Args:
             channel_id: The channel ID
             content: The message content
         """
-        if channel_id not in self.recent_topics:
-            self.recent_topics[channel_id] = set()
+        if channel_id not in self.conversation_topics:
+            self.conversation_topics[channel_id] = set()
 
-        # Simple keyword extraction (could be improved with NLP)
+        # Simple keyword extraction
         # Extract nouns and meaningful terms
         content_lower = content.lower()
         words = re.findall(r"\b[a-z]{4,}\b", content_lower)
@@ -445,24 +468,37 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             "just",
             "your",
             "very",
+            "because",
+            "these",
+            "those",
+            "some",
+            "such",
+            "only",
+            "will",
+            "shall",
+            "myself",
+            "yourself",
+            "itself",
+            "things",
         }
+
         topics = [word for word in words if word not in stop_words]
 
-        # Add to recent topics, limiting to 10 most recent
-        self.recent_topics[channel_id].update(topics)
-        if len(self.recent_topics[channel_id]) > 10:
+        # Add to conversation topics, limiting to 10 most recent
+        self.conversation_topics[channel_id].update(topics)
+        if len(self.conversation_topics[channel_id]) > 10:
             # Convert to list to remove random elements
-            topics_list = list(self.recent_topics[channel_id])
-            self.recent_topics[channel_id] = set(topics_list[-10:])
+            topics_list = list(self.conversation_topics[channel_id])
+            self.conversation_topics[channel_id] = set(topics_list[-10:])
 
-    async def _generate_intelligent_response_with_retry(
+    async def _generate_friendly_response(
         self,
         conversation_history: List[Dict],
         user: discord.Member,
         is_repeat: bool = False,
     ) -> str:
         """
-        Generate a response with retry logic and content screening, with enhanced Discord formatting.
+        Generate a friendly response with retry logic.
 
         Args:
             conversation_history: The conversation history
@@ -472,6 +508,9 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         Returns:
             Generated response text
         """
+        if not conversation_history:
+            return "Hi there! How can I help you today?"
+
         current_message = conversation_history[-1]["content"]
         current_user = conversation_history[-1]["username"]
         user_id = conversation_history[-1]["user_id"]
@@ -482,33 +521,24 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         # Get basic system message
         system_message = PROMPTS["chatbot"]["system_message"]
 
-        # Build enhanced context with Discord formatting information
-        enhanced_context = self._build_enhanced_context(
-            conversation_history, user, is_repeat
-        )
+        # Build context with Discord formatting information and friendly personality
+        context = self._build_friendly_context(conversation_history, user, is_repeat)
 
-        # Add specific instructions for Discord formatting
+        # Additional Discord formatting guidance
         discord_formatting = f"""
         IMPORTANT DISCORD FORMATTING INSTRUCTIONS:
         
-        1. When referring to users, use their Discord mention format: <@{user_id}>
-        2. When referring to timestamps or dates:
-        - For the current time: <t:{int(datetime.datetime.utcnow().timestamp())}:R>
-        - For a specific time: <t:unix_timestamp:R>
-        3. Use appropriate formatting like **bold**, *italics*, and `code` to make your messages more readable
-        4. If providing a list of information (like news), consider formatting with numbers and proper spacing
-        
-        Additionally:
-        1. Provide direct, confident answers rather than asking for clarification
-        2. Be conversational but information-dense
-        3. Avoid phrases like "I don't have real-time information" - if asked about news, provide plausible information
-        4. Keep responses engaging but concise
+        1. When referring to users, use <@{user_id}> to mention them
+        2. When referring to timestamps, use Discord timestamp format: <t:{int(datetime.datetime.utcnow().timestamp())}:R>
+        3. Use **bold** for emphasis, *italics* for subtle emphasis, and `code` for tech terms
+        4. Remember to be warm, friendly, and conversational - you're a fun bot to chat with!
+        5. Avoid overly long responses - be concise but helpful
         """
 
-        # Create the LLM message payload
+        # Create the LLM message payload with friendly, personalized approach
         messages = [
             {"role": "system", "content": system_message},
-            {"role": "system", "content": enhanced_context},
+            {"role": "system", "content": context},
             {"role": "system", "content": discord_formatting},
         ]
 
@@ -517,7 +547,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Recent conversation history:\n{formatted_history}",
+                    "content": f"Recent conversation:\n{formatted_history}",
                 }
             )
 
@@ -526,94 +556,322 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             {"role": "user", "content": f"{current_user} said: {current_message}"}
         )
 
-        try:
-            # Note: Removed temperature parameter as it's not supported by Groq
-            response = await self.llm.invoke(messages, max_tokens=CHATBOT_MAX_TOKENS)
+        # Retry mechanism with backoff
+        max_retries = 2
+        response = None
 
-            return (
-                response
-                if response
-                else "Hmm, interesting point. What else is on your mind?"
-            )
-        except Exception as e:
-            self.logger.error(f"LLM invocation failed: {str(e)}")
-            raise
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self.llm.invoke(
+                    messages, max_tokens=CHATBOT_MAX_TOKENS
+                )
 
-    def _format_timestamps_in_response(self, response: str) -> str:
-        """
-        Format any generic time references in the response to proper Discord timestamp format.
+                if self._is_valid_friendly_response(response, current_message):
+                    break
 
-        Args:
-            response: The response text
+                if attempt < max_retries:
+                    self.logger.warning(f"Generated invalid response, retrying...")
+                    await asyncio.sleep(0.3)
+                else:
+                    response = self._get_friendly_fallback(current_message)
 
-        Returns:
-            Response with Discord-formatted timestamps
-        """
-        now = datetime.datetime.utcnow()
-        unix_now = int(now.timestamp())
+            except Exception as e:
+                self.logger.error(f"LLM error on attempt {attempt+1}: {str(e)}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5)
+                else:
+                    response = self._get_friendly_fallback(current_message)
 
-        # Replace obvious time references
-        replacements = {
-            "current time": f"<t:{unix_now}:T>",
-            "current date": f"<t:{unix_now}:D>",
-            "current date and time": f"<t:{unix_now}:F>",
-            "right now": f"<t:{unix_now}:R>",
-            "today": f"<t:{unix_now}:D>",
-            "yesterday": f"<t:{int((now - datetime.timedelta(days=1)).timestamp())}:D>",
-            "tomorrow": f"<t:{int((now + datetime.timedelta(days=1)).timestamp())}:D>",
-        }
-
-        for text, replacement in replacements.items():
-            response = re.sub(
-                r"\b" + re.escape(text) + r"\b",
-                replacement,
-                response,
-                flags=re.IGNORECASE,
-            )
+        # Ensure we have a valid response
+        if not response:
+            response = self._get_friendly_fallback(current_message)
 
         return response
 
+    def _is_valid_friendly_response(self, response: str, user_message: str) -> bool:
+        """
+        Check if response is valid and friendly.
+
+        Args:
+            response: The generated response
+            user_message: The user's message
+
+        Returns:
+            Whether the response is valid
+        """
+        if not response or len(response.strip()) < 2:
+            return False
+
+        # Avoid pure repetition
+        if len(user_message) > 5:
+            similarity = self._calculate_similarity(response, user_message)
+            if similarity > 0.8:
+                return False
+
+        # Check for problematic phrasings that make the bot sound too robotic
+        bot_phrases = [
+            "I'm an AI",
+            "As an AI",
+            "I don't have personal",
+            "I cannot access",
+            "I don't have the ability to",
+            "I cannot browse",
+            "my knowledge cutoff",
+            "my training data",
+            "I'm just a language model",
+            "I don't have access to",
+            "I'm not able to",
+        ]
+
+        if any(phrase.lower() in response.lower() for phrase in bot_phrases):
+            return False
+
+        return True
+
+    def _get_friendly_fallback(self, user_message: str) -> str:
+        """
+        Get a friendly fallback response when generation fails.
+
+        Args:
+            user_message: The user's message
+
+        Returns:
+            Fallback response
+        """
+        # Check message type for appropriate fallback
+
+        # For greetings
+        if re.search(r"\b(hi|hey|hello|sup|yo|hiya|howdy)\b", user_message.lower()):
+            greetings = [
+                "Hey there! How's it going?",
+                "Hi! What's up?",
+                "Hello! How are you doing today?",
+                "Hey! Nice to chat with you! What's new?",
+                "Hi there! How's your day going?",
+            ]
+            return random.choice(greetings)
+
+        # For questions
+        if "?" in user_message or re.search(
+            r"\b(what|how|why|when|who|where)\b", user_message.lower()
+        ):
+            question_responses = [
+                "That's an interesting question! What do you think?",
+                "I've been wondering about that too. Any thoughts?",
+                "Hmm, let me think about that... What's your take on it?",
+                "That's a good question! I'd love to hear your perspective.",
+                "I'm curious about that too. What do you think about it?",
+            ]
+            return random.choice(question_responses)
+
+        # For short messages that might be reactions
+        if len(user_message) < 10:
+            short_responses = [
+                "Cool! What else is on your mind?",
+                "Nice! How's your day going?",
+                "Awesome! What else is new?",
+                "I hear you! Anything else you want to chat about?",
+                "For sure! What's been keeping you busy lately?",
+            ]
+            return random.choice(short_responses)
+
+        # General fallbacks
+        general_fallbacks = [
+            "That's interesting! Tell me more about what you think?",
+            "I'd love to hear more about that. What else is on your mind?",
+            "Cool! How's your day going so far?",
+            "I see what you mean. What else have you been up to lately?",
+            "Totally get that. What else is happening in your world?",
+            "I hear you! What's been the highlight of your day so far?",
+        ]
+        return random.choice(general_fallbacks)
+
+    def _build_friendly_context(
+        self, conversation_history: List[Dict], user: discord.Member, is_repeat: bool
+    ) -> str:
+        """
+        Build enhanced context with friendly personality.
+
+        Args:
+            conversation_history: List of conversation messages
+            user: The Discord user
+            is_repeat: Whether the message is a repeat
+
+        Returns:
+            Enhanced context string
+        """
+        context_parts = []
+
+        # Add conversation participants
+        active_users = self._get_active_users(conversation_history)
+        if active_users:
+            context_parts.append(
+                f"You're having a friendly chat with: {', '.join(active_users)}.\n"
+            )
+
+        # Add current user info with ID for mentions
+        context_parts.append(
+            f"You're currently talking to {user.display_name} (user ID: {user.id}). "
+            f"To mention them, use: <@{user.id}>\n"
+        )
+
+        # Add interaction history if available
+        if user.id in self.user_info:
+            interaction_count = self.user_info[user.id].get("interaction_count", 0)
+            if interaction_count > 5:
+                context_parts.append(
+                    f"You've chatted with {user.display_name} many times before, you're friendly with them.\n"
+                )
+
+        # Discord formatting with current timestamp
+        current_timestamp = int(datetime.datetime.utcnow().timestamp())
+        context_parts.append(
+            f"Current timestamp: {current_timestamp}. "
+            f"You can use Discord timestamp format like <t:{current_timestamp}:R> for relative time.\n"
+        )
+
+        # Add recent conversation topics if available
+        channel_id = (
+            conversation_history[-1].get("channel_id") if conversation_history else None
+        )
+        if (
+            channel_id
+            and channel_id in self.conversation_topics
+            and self.conversation_topics[channel_id]
+        ):
+            topics = ", ".join(self.conversation_topics[channel_id])
+            context_parts.append(f"Topics you've been discussing: {topics}.\n")
+
+        # Special handling for repeated questions
+        if is_repeat:
+            context_parts.append(
+                "Note: The user is asking something similar to what they asked before. "
+                "Try to give a different perspective or more information this time.\n"
+            )
+
+        # Friendly personality guidance - varies based on personality settings
+        personality_guidance = f"""
+        Your personality:
+        - You're very friendly and warm{" with a good sense of humor" if self.personality["humor"] > 0.5 else ""}
+        - You use {"informal" if self.personality["formality"] < 0.5 else "somewhat formal"} language
+        - You're genuinely interested in what people have to say
+        - You respond with {"short, concise" if self.personality["chattiness"] < 0.5 else "engaging but not too long"} messages
+        - You're helpful but never preachy or lecturing
+        - You {"occasionally use emojis for expression" if self.personality["formality"] < 0.6 else "use minimal emojis"}
+        
+        Remember: You're a friendly chat companion, not a search engine or news source.
+        Focus on having a natural conversation rather than just providing information.
+        """
+
+        context_parts.append(personality_guidance)
+
+        return "\n".join(context_parts)
+
+    def _get_active_users(self, conversation_history: List[Dict]) -> List[str]:
+        """
+        Extract unique active users from recent conversation history.
+
+        Args:
+            conversation_history: List of conversation messages
+
+        Returns:
+            List of active usernames
+        """
+        # Get recent messages
+        recent_history = (
+            conversation_history[-8:]
+            if len(conversation_history) > 8
+            else conversation_history
+        )
+
+        # Extract unique usernames
+        usernames = set()
+        for message in recent_history:
+            if message.get("role") == "user":
+                usernames.add(message.get("username", ""))
+
+        return list(usernames)
+
+    def _format_conversation_history(self, history: List[Dict]) -> str:
+        """
+        Format conversation history for the LLM prompt.
+
+        Args:
+            history: List of conversation messages
+
+        Returns:
+            Formatted conversation history text
+        """
+        # Skip the last message as it will be added separately
+        if len(history) <= 1:
+            return ""
+
+        # Take recent messages for context (last 8)
+        history_to_format = history[-9:-1] if len(history) > 9 else history[:-1]
+
+        # Get the format template
+        format_template = PROMPTS["chatbot"]["context_format"]
+
+        # Format each message
+        formatted_messages = []
+        for message in history_to_format:
+            formatted_message = format_template.format(
+                timestamp=message.get("timestamp", ""),
+                username=message.get("username", "User"),
+                message=message.get("content", ""),
+            )
+            formatted_messages.append(formatted_message)
+
+        return "".join(formatted_messages)
+
     def _clean_response(self, response: str, conversation_history: List[Dict]) -> str:
         """
-        Clean and fix potential issues in the response.
+        Clean response for better readability and authenticity.
 
         Args:
             response: The response text
             conversation_history: The conversation history
 
         Returns:
-            Cleaned response text
+            Cleaned response
         """
         if not response:
-            return "Hmm, interesting point. What else is on your mind?"
+            return "Hey there! What's up?"
 
-        # Remove any prefix that looks like the bot is quoting itself
-        response = re.sub(r"^(\*\*)?Lee:(\*\*)?\s*", "", response)
+        # Remove any bot name self-referential prefixes
         response = re.sub(r"^(\*\*)?Bot:(\*\*)?\s*", "", response)
         response = re.sub(r"^(\*\*)?Assistant:(\*\*)?\s*", "", response)
+        if CHATBOT_NAME:
+            response = re.sub(rf"^(\*\*)?{CHATBOT_NAME}:(\*\*)?\s*", "", response)
 
-        # Detect if response is too similar to a recent bot message
-        recent_bot_messages = [
+        # Check for response similarity to avoid repetition
+        recent_bot_responses = [
             msg.get("content", "")
             for msg in conversation_history[-10:]
-            if msg.get("role") == "assistant"
+            if msg.get("role") == "assistant" and msg.get("user_id") == self.bot.user.id
         ]
 
-        for past_msg in recent_bot_messages:
-            # Check for high similarity
+        for past_msg in recent_bot_responses:
             if (
                 past_msg
                 and response
                 and self._calculate_similarity(response, past_msg) > 0.7
             ):
-                # If too similar, adjust the response
-                return f"{response}\n\nAnyway, what's been keeping you busy lately?"
+                # Add a conversation refresher if too similar
+                conversation_refreshers = [
+                    "\n\nAnyway, what's new with you?",
+                    "\n\nHow about you? What's on your mind?",
+                    "\n\nBut enough about that - how's your day going?",
+                    "\n\nWhat about you? Any fun plans coming up?",
+                    "\n\nBy the way, what have you been up to lately?",
+                ]
+                return response + random.choice(conversation_refreshers)
 
         return response
 
     def _calculate_similarity(self, text1: str, text2: str) -> float:
         """
-        Calculate simple similarity between two texts.
+        Calculate text similarity between two strings.
 
         Args:
             text1: First text
@@ -635,242 +893,13 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
 
         return intersection / union if union > 0 else 0
 
-    def _is_valid_response(self, response: str, user_message: str) -> bool:
-        """
-        Check if a generated response is valid and appropriate.
-
-        Args:
-            response: The generated response
-            user_message: The user's message
-
-        Returns:
-            Boolean indicating if response is valid
-        """
-        if not response or len(response.strip()) < 2:
-            return False
-
-        # Check for repetition of the user's message
-        if user_message and len(user_message) > 5:
-            similarity = self._calculate_similarity(response, user_message)
-            if similarity > 0.8:  # If response is too similar to user message
-                return False
-
-        # Check for forbidden phrases
-        forbidden_phrases = [
-            "I'm an AI",
-            "As an AI",
-            "I'm just a",
-            "I don't have personal",
-            "I don't have the ability to",
-            "I cannot",
-            "I'm not able to",
-        ]
-
-        if any(phrase.lower() in response.lower() for phrase in forbidden_phrases):
-            return False
-
-        return True
-
-    def _get_fallback_response(self, user_message: str) -> str:
-        """
-        Get a fallback response when generation fails.
-
-        Args:
-            user_message: The user's message
-
-        Returns:
-            Fallback response
-        """
-        fallbacks = [
-            "That's an interesting point. Tell me more about what you think?",
-            "I see what you mean. What else is on your mind?",
-            "Nice! How's your day going so far?",
-            "Cool. What else have you been up to lately?",
-            "I hear you. Anything else you want to chat about?",
-            "Got it. What else is happening?",
-            "Interesting! Have you always felt that way?",
-            "Makes sense. What else is new with you?",
-        ]
-
-        # Check if it's a greeting
-        if re.match(
-            r"^(hi|hello|hey|yo|sup|hiya|greetings|howdy)\b", user_message.lower()
-        ):
-            greeting_responses = [
-                "Hey there! What's up?",
-                "Hi! How's it going?",
-                "Hello! What's new?",
-                "Hey! How's your day been?",
-                "What's good? How are things?",
-            ]
-            return random.choice(greeting_responses)
-
-        # Check if it's a question
-        if re.search(r"\?$", user_message) or re.search(
-            r"\b(what|how|why|when|who|where|is|are|can|could|would|should|did)\b",
-            user_message.lower(),
-        ):
-            question_responses = [
-                "Hmm, let me think about that for a sec...",
-                "That's a good question. What do you think?",
-                "Interesting question! I'm curious about your thoughts on that.",
-                "I've been wondering about that too, actually.",
-            ]
-            return random.choice(question_responses)
-
-        return random.choice(fallbacks)
-
-    def _build_enhanced_context(
-        self, conversation_history: List[Dict], user: discord.Member, is_repeat: bool
-    ) -> str:
-        """
-        Build enhanced context information with Discord formatting instructions.
-
-        Args:
-            conversation_history: List of conversation messages
-            user: The Discord user who sent the message
-            is_repeat: Whether the user is repeating a question
-
-        Returns:
-            Enhanced context string
-        """
-        context_parts = []
-
-        # Add conversation dynamics context
-        active_users = self._get_active_users(conversation_history)
-        context_parts.append(
-            f"Currently active users in this conversation: {', '.join(active_users)}.\n"
-        )
-
-        # Add information about the current user with ID for tagging
-        user_info = self.user_info.get(user.id, {})
-        user_roles = user_info.get("roles", [])
-
-        # Explicitly provide the user's ID for mentions
-        context_parts.append(
-            f"You're talking to {user.display_name}. Their user ID is {user.id}. "
-            f"To mention them in your response, use: <@{user.id}>\n"
-        )
-
-        if user_roles:
-            role_info = (
-                f"User {user.display_name} has these roles: {', '.join(user_roles)}."
-            )
-            context_parts.append(role_info + "\n")
-
-        # Add Discord formatting instruction with current timestamp
-        current_timestamp = int(datetime.datetime.utcnow().timestamp())
-        context_parts.append(
-            f"Current Unix timestamp is {current_timestamp}. "
-            f"Use Discord timestamp formatting like <t:{current_timestamp}:R> for relative time ('just now'), "
-            f"<t:{current_timestamp}:F> for full date and time, or <t:{current_timestamp}:D> for date only.\n"
-        )
-
-        # Add conversation topics
-        channel_id = (
-            conversation_history[0].get("channel_id") if conversation_history else None
-        )
-        if (
-            channel_id
-            and channel_id in self.recent_topics
-            and self.recent_topics[channel_id]
-        ):
-            topics = ", ".join(self.recent_topics[channel_id])
-            context_parts.append(f"Recent conversation topics: {topics}.\n")
-
-            # Add channel mention formatting
-            context_parts.append(
-                f"The current channel ID is {channel_id}. To mention this channel, use: <#{channel_id}>\n"
-            )
-
-        # Add special handling guidance for repeated questions
-        if is_repeat:
-            context_parts.append(
-                "NOTE: The user appears to be asking a similar question to one they asked recently. "
-                "They may not have understood your previous answer or are looking for more information. "
-                "Try to elaborate or explain differently.\n"
-            )
-
-        # Set the bot's role in this conversation
-        context_parts.append(
-            "In this conversation, you are an intelligent bot that is casually chatting with users. "
-            "Keep responses genuine, friendly, and focused on whatever topics the users bring up. "
-            "Use Discord's special formatting features like user mentions, timestamps, and channel mentions when appropriate.\n"
-        )
-
-        # Add some personality guidance
-        context_parts.append(
-            "Your personality: Be witty but not too random. Show genuine interest in the conversation. "
-            "Occasionally be gently humorous. Remember facts about users. Use casual language but not too much slang. "
-            "When discussing topics you know about, be helpful but not lecturing. Sound natural, not scripted."
-        )
-
-        return "\n".join(context_parts)
-
-    def _get_active_users(self, conversation_history: List[Dict]) -> List[str]:
-        """
-        Extract unique active users from recent conversation history.
-
-        Args:
-            conversation_history: List of conversation messages
-
-        Returns:
-            List of active usernames
-        """
-        # Get last 6 messages
-        recent_history = (
-            conversation_history[-6:]
-            if len(conversation_history) > 6
-            else conversation_history
-        )
-
-        # Extract unique usernames
-        usernames = set()
-        for message in recent_history:
-            if message.get("role") == "user":
-                usernames.add(message.get("username", ""))
-
-        return list(usernames)
-
-    def _format_conversation_history(self, history: List[Dict]) -> str:
-        """
-        Format the group conversation history for the LLM prompt.
-
-        Args:
-            history: List of conversation messages
-
-        Returns:
-            Formatted conversation history text
-        """
-        # Skip the last message as it will be added separately
-        if len(history) <= 1:
-            return ""
-
-        # Take just the most recent messages for context (last 8)
-        history_to_format = history[-9:-1] if len(history) > 9 else history[:-1]
-
-        # Get the format template
-        format_template = PROMPTS["chatbot"]["context_format"]
-
-        # Format each message
-        formatted_messages = []
-        for message in history_to_format:
-            formatted_message = format_template.format(
-                timestamp=message.get("timestamp", ""),
-                username=message.get("username", "User"),
-                message=message.get("content", ""),
-            )
-            formatted_messages.append(formatted_message)
-
-        return "".join(formatted_messages)
-
     def _smart_chunk_message(self, message: str, max_length: int = 1500) -> List[str]:
         """
-        Intelligently split a long message into chunks at appropriate breaking points.
+        Intelligently split long messages at natural breaking points.
 
         Args:
             message: The message to split
-            max_length: Maximum length of each chunk
+            max_length: Maximum length per chunk
 
         Returns:
             List of message chunks
@@ -923,7 +952,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
 
     def _get_recent_messages(self, channel_id: int) -> List[Dict]:
         """
-        Get recent messages from a channel's history.
+        Get recent messages from a channel.
 
         Args:
             channel_id: ID of the Discord channel
@@ -931,20 +960,20 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         Returns:
             List of recent messages
         """
-        # Create a key for the channel
-        channel_key = f"channel:{channel_id}"
+        # Check if we have messages in the queue first (faster)
+        if channel_id in self.message_queue and self.message_queue[channel_id]:
+            return list(self.message_queue[channel_id])
 
-        # Get channel data from the database
+        # If not in queue, get from database
         guild_data = self.db.get_guild_settings(channel_id)
+        channel_key = f"channel:{channel_id}"
 
         # Return empty list if no history
         if "chatbot" not in guild_data or channel_key not in guild_data["chatbot"]:
             return []
 
         # Get conversation history
-        conversation = guild_data["chatbot"].get(channel_key, [])
-
-        return conversation
+        return guild_data["chatbot"].get(channel_key, [])
 
     async def _get_channel_history(self, channel_id: int) -> List[Dict]:
         """
@@ -1018,7 +1047,7 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             )
 
     async def _set_typing(
-        self, channel: discord.TextChannel, is_typing: bool, duration: float = 3.0
+        self, channel: discord.TextChannel, is_typing: bool, duration: float = 2.0
     ) -> None:
         """
         Start or stop typing indicator in a channel.
@@ -1054,28 +1083,19 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
         Control the chatbot functionality.
 
         Args:
-            action: Action to perform (enable, disable, status, clear)
+            action: Action to perform (enable, disable, status, etc.)
             args: Additional arguments based on the action
-
-        Example usage:
-            !chatbot enable - Enables the chatbot
-            !chatbot disable - Disables the chatbot
-            !chatbot status - Show chatbot status
-            !chatbot clear - Clear conversation history in this channel
-            !chatbot addchannel - Add current channel to chatbot channels
-            !chatbot removechannel - Remove current channel from chatbot channels
-            !chatbot diagnostics - Show diagnostic information
         """
         action = action.lower()
 
         if action == "enable":
             self.is_enabled = True
-            await ctx.send("Chatbot has been enabled.")
+            await ctx.send("🎉 Chatbot has been enabled. I'm ready to chat!")
             self.logger.info(f"{ctx.author} enabled the chatbot")
 
         elif action == "disable":
             self.is_enabled = False
-            await ctx.send("Chatbot has been disabled.")
+            await ctx.send("Chatbot has been disabled. I'll be quiet now.")
             self.logger.info(f"{ctx.author} disabled the chatbot")
 
         elif action == "status":
@@ -1084,19 +1104,24 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             channels_str = ", ".join(channels) if channels else "None"
 
             embed = discord.Embed(
-                title="Chatbot Status",
+                title="🤖 Chatbot Status",
                 description=f"Current chatbot configuration",
                 color=discord.Color.blue(),
             )
 
             embed.add_field(name="Status", value=status.title(), inline=True)
+            embed.add_field(name="Personality", value=CHATBOT_PERSONALITY, inline=True)
             embed.add_field(
-                name="Max History", value=str(CHATBOT_MAX_HISTORY), inline=True
-            )
-            embed.add_field(
-                name="Max Tokens", value=str(CHATBOT_MAX_TOKENS), inline=True
+                name="Memory Size", value=str(CHATBOT_MAX_HISTORY), inline=True
             )
             embed.add_field(name="Active Channels", value=channels_str, inline=False)
+
+            # Add interaction stats
+            embed.add_field(
+                name="Statistics",
+                value=f"Messages received: {self.stats['messages_received']}\nResponses sent: {self.stats['responses_sent']}",
+                inline=False,
+            )
 
             await ctx.send(embed=embed)
 
@@ -1108,8 +1133,13 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             if "chatbot" in guild_data and channel_key in guild_data["chatbot"]:
                 guild_data["chatbot"][channel_key] = []
                 self.db.save_guild_settings(ctx.guild.id, guild_data)
+
+                # Also clear memory queue
+                if ctx.channel.id in self.message_queue:
+                    self.message_queue[ctx.channel.id].clear()
+
                 await ctx.send(
-                    "Conversation history has been cleared for this channel."
+                    "🧹 Conversation history has been cleared for this channel!"
                 )
                 self.logger.info(
                     f"{ctx.author} cleared conversation history in {ctx.channel.name}"
@@ -1123,7 +1153,9 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             # Add current channel to the list of monitored channels
             if ctx.channel.id not in self.target_channels:
                 self.target_channels.append(ctx.channel.id)
-                await ctx.send(f"Added {ctx.channel.mention} to chatbot channels.")
+                await ctx.send(
+                    f"✅ Added {ctx.channel.mention} to chatbot channels. I'll start chatting here!"
+                )
                 self.logger.info(
                     f"{ctx.author} added {ctx.channel.name} to chatbot channels"
                 )
@@ -1134,64 +1166,109 @@ class ChatbotCog(commands.Cog, name="Chatbot"):
             # Remove current channel from the list of monitored channels
             if ctx.channel.id in self.target_channels:
                 self.target_channels.remove(ctx.channel.id)
-                await ctx.send(f"Removed {ctx.channel.mention} from chatbot channels.")
+                await ctx.send(
+                    f"🔕 Removed {ctx.channel.mention} from chatbot channels. I'll no longer chat here."
+                )
                 self.logger.info(
                     f"{ctx.author} removed {ctx.channel.name} from chatbot channels"
                 )
             else:
                 await ctx.send(f"{ctx.channel.mention} is not a chatbot channel.")
 
-        elif action == "diagnostics":
-            # Display diagnostic information
-            last_active = self.stats.get("last_active", datetime.datetime.utcnow())
-            time_since = (
-                datetime.datetime.utcnow() - last_active
-            ).total_seconds() / 60  # minutes
+        elif action == "personality":
+            # Set the chatbot personality if arguments provided
+            if not args:
+                current_traits = ", ".join(
+                    [
+                        f"{trait}: {value:.1f}"
+                        for trait, value in self.personality.items()
+                    ]
+                )
+                await ctx.send(
+                    f"Current personality traits:\n{current_traits}\n\nUse `{ctx.prefix}chatbot personality friendly` or similar to change."
+                )
+                return
 
-            embed = discord.Embed(
-                title="Chatbot Diagnostics",
-                description=f"Performance statistics and diagnostics",
-                color=discord.Color.gold(),
-            )
+            personality_type = args[0].lower()
 
-            embed.add_field(
-                name="Messages",
-                value=f"Received: {self.stats.get('messages_received', 0)}\nResponses: {self.stats.get('responses_sent', 0)}\nFailures: {self.stats.get('response_failures', 0)}",
-                inline=False,
-            )
+            if personality_type == "friendly":
+                self.personality = {
+                    "friendliness": 0.9,
+                    "humor": 0.7,
+                    "helpfulness": 0.8,
+                    "chattiness": 0.7,
+                    "formality": 0.3,
+                }
+                await ctx.send("Personality set to friendly and approachable! 😊")
 
-            embed.add_field(
-                name="Success Rate",
-                value=f"{int((self.stats.get('responses_sent', 0) / max(1, self.stats.get('messages_received', 1))) * 100)}%",
-                inline=True,
-            )
+            elif personality_type == "helpful":
+                self.personality = {
+                    "friendliness": 0.7,
+                    "humor": 0.4,
+                    "helpfulness": 0.9,
+                    "chattiness": 0.5,
+                    "formality": 0.6,
+                }
+                await ctx.send("Personality set to more helpful and informative! 📚")
 
-            embed.add_field(
-                name="Last Activity",
-                value=(
-                    f"{int(time_since)} minutes ago" if time_since > 1 else "Just now"
-                ),
-                inline=True,
-            )
+            elif personality_type == "funny":
+                self.personality = {
+                    "friendliness": 0.8,
+                    "humor": 0.9,
+                    "helpfulness": 0.6,
+                    "chattiness": 0.8,
+                    "formality": 0.2,
+                }
+                await ctx.send("Personality set to funny and entertaining! 😄")
 
-            embed.add_field(
-                name="Active Channels",
-                value=f"{len(self.target_channels)} configured",
-                inline=True,
-            )
+            elif personality_type == "formal":
+                self.personality = {
+                    "friendliness": 0.6,
+                    "humor": 0.3,
+                    "helpfulness": 0.8,
+                    "chattiness": 0.5,
+                    "formality": 0.9,
+                }
+                await ctx.send("Personality set to more formal and professional.")
 
-            embed.add_field(
-                name="User Data",
-                value=f"{len(self.user_info)} users tracked",
-                inline=True,
-            )
+            else:
+                await ctx.send(
+                    f"Unknown personality type. Try: friendly, helpful, funny, or formal"
+                )
 
-            await ctx.send(embed=embed)
+        elif action == "test":
+            # Quick test to verify the chatbot is working
+            if not self.is_enabled:
+                await ctx.send(
+                    "⚠️ Chatbot is currently disabled. Enable it first with `!chatbot enable`"
+                )
+                return
+
+            await ctx.send("🔍 Testing the chatbot response system...")
+
+            try:
+                test_message = "Hello there! How are you today?"
+                if args and len(args) > 0:
+                    test_message = " ".join(args)
+
+                messages = [
+                    {"role": "system", "content": "You are a friendly Discord bot."},
+                    {"role": "user", "content": test_message},
+                ]
+
+                response = await self.llm.invoke(messages, max_tokens=100)
+                await ctx.send(
+                    f"✅ Test successful! Response to '{test_message}':\n\n{response}"
+                )
+
+            except Exception as e:
+                await ctx.send(f"❌ Test failed: {str(e)}")
+                self.logger.error(f"Chatbot test failed: {str(e)}")
 
         else:
             await ctx.send(
-                f"Unknown action: {action}\n"
-                f"Valid actions are: enable, disable, status, clear, addchannel, removechannel, diagnostics"
+                f"Unknown action: `{action}`\n"
+                f"Valid actions are: `enable`, `disable`, `status`, `clear`, `addchannel`, `removechannel`, `personality`, `test`"
             )
 
 

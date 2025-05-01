@@ -1,58 +1,111 @@
 """
-Main entry point for the Discord bot.
+Main entry point for the Discord bot with enhanced configuration.
 """
 
 import os
+import sys
 import logging
+import asyncio
+import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 from utils.logging_manager import LoggingManager
-from utils.settings import BOT_TOKEN, LOG_LEVEL, LOG_TO_FILE, LOG_FILE_PATH
+from utils.settings import (
+    BOT_TOKEN,
+    BOT_VERSION,
+    LOG_LEVEL,
+    LOG_TO_FILE,
+    LOG_FILE_PATH,
+    GUILD_ID,
+)
 from bot import bot
 
-# Ensure logs and data directories exist
-os.makedirs("logs", exist_ok=True)
-os.makedirs("data", exist_ok=True)
+# Configure application startup path
+APP_PATH = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(APP_PATH, "..", "data")
+LOGS_PATH = os.path.join(APP_PATH, "..", "logs")
 
-# Ensure cogs directory exists
-os.makedirs("src/cogs", exist_ok=True)
+# Ensure necessary directories exist
+os.makedirs(LOGS_PATH, exist_ok=True)
+os.makedirs(DATA_PATH, exist_ok=True)
+os.makedirs(os.path.join(APP_PATH, "cogs"), exist_ok=True)
 
 # Load environment variables
 load_dotenv()
 
-# Set up logging
+# Set up logging with timestamp
+current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_filename = f"{LOG_FILE_PATH.rsplit('.', 1)[0]}_{current_time}.log"
+
 logger = LoggingManager.setup_logger(
     name="main",
     console_output=True,
     file_output=LOG_TO_FILE,
-    filename=LOG_FILE_PATH,
+    filename=log_filename,
     file_mode="w",
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
 )
 
 
-def main():
-    """Main entry point for the bot."""
+async def main():
+    """Asynchronous main entry point for the bot."""
     # Check for required token
     if not BOT_TOKEN:
         logger.critical("No BOT_TOKEN found in environment variables!")
         return
 
     try:
-        logger.info("Starting bot...")
+        logger.info(f"Starting Discord bot v{BOT_VERSION}")
+        logger.info(f"Python version: {sys.version}")
 
         # Print summary of loaded modules
         logger.info(f"Bot prefix: {bot.command_prefix}")
-        logger.info(f"Starting version: {bot.app_version}")
         logger.info(f"Loading extensions: {', '.join(bot.startup_extensions)}")
 
-        # Start the bot
-        bot.run(BOT_TOKEN)
+        if GUILD_ID:
+            logger.info(f"Running in single guild mode with ID: {GUILD_ID}")
+        else:
+            logger.warning("No GUILD_ID set - bot will operate in multi-guild mode")
+
+        # Start the bot with error handling
+        try:
+            async with bot:
+                await bot.start(BOT_TOKEN)
+        except Exception as e:
+            logger.critical(f"Bot crashed: {str(e)}")
+            logger.critical(traceback.format_exc())
+
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user.")
+        logger.info("Bot stopped by user (KeyboardInterrupt).")
     except Exception as e:
-        logger.critical(f"Failed to start bot: {str(e)}", exc_info=True)
+        logger.critical(f"Failed to start bot: {str(e)}")
+        logger.critical(traceback.format_exc())
+
+
+def cli_startup():
+    """Command-line interface entry point."""
+    # Print banner
+    banner = f"""
+    ╔═══════════════════════════════════════════╗
+    ║            Discord Multi-Bot              ║
+    ║             Version {BOT_VERSION:<10}            ║
+    ║        Starting bot services...           ║
+    ╚═══════════════════════════════════════════╝
+    """
+    print(banner)
+
+    # Run the async main function
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBot shutdown requested by user.")
+    except Exception as e:
+        print(f"\nFatal error: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    cli_startup()
