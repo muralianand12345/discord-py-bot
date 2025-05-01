@@ -30,7 +30,7 @@ class CustomBot(commands.Bot):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.app_version = "0.2.0"
+        self.app_version = "0.3.0"
         self.startup_extensions: List[str] = EXTENSIONS_ENABLED
         self.settings = {}  # Bot-wide settings store
 
