@@ -1,5 +1,8 @@
 import discord
 import logging
+import os
+import asyncio
+from discord.ext import commands
 from datetime import datetime
 
 from config import BOT
@@ -22,9 +25,13 @@ intents.members = True
 intents.message_content = True
 
 
-class Bot(discord.Client):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class CustomBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix=BOT.BOT_PREFIX,
+            intents=intents,
+            description="A multi-purpose Discord bot with modular features",
+        )
         self.settings = {}
         self.status_messages = [
             f"with {BOT.BOT_PREFIX}help",
@@ -33,6 +40,82 @@ class Bot(discord.Client):
             "with new friends",
             "and having fun!",
         ]
-        self.guildId = BOT.GUILD_ID
+        self.guild_id = int(BOT.GUILD_ID) if BOT.GUILD_ID else None
 
-    
+    async def setup_hook(self):
+        """Initialize bot extensions and load event listeners."""
+        await self.load_extensions()
+        await self.load_event_handlers()
+        logger.info("Bot setup complete.")
+
+    async def load_extensions(self):
+        """Load all enabled cog extensions."""
+        extensions_enabled = os.getenv("EXTENSIONS_ENABLED", "").split(",")
+        extensions_enabled = [ext.strip() for ext in extensions_enabled if ext.strip()]
+
+        if not extensions_enabled:
+            logger.warning(
+                "No extensions enabled in EXTENSIONS_ENABLED environment variable."
+            )
+            return
+
+        logger.info(f"Loading extensions: {', '.join(extensions_enabled)}")
+
+        for extension in extensions_enabled:
+            try:
+                await self.load_extension(f"cogs.{extension}")
+                logger.info(f"Loaded extension: {extension}")
+            except Exception as e:
+                logger.error(f"Failed to load extension {extension}: {str(e)}")
+
+    async def load_event_handlers(self):
+        """Load all event handlers from the events directory."""
+        try:
+            # Import all event handlers
+            from events import all_events
+
+            logger.info("Loaded event handlers successfully")
+        except Exception as e:
+            logger.error(f"Failed to load event handlers: {str(e)}")
+
+    async def on_ready(self):
+        """Called when the bot is ready and connected."""
+        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Connected to {len(self.guilds)} guild(s)")
+
+        if self.guild_id:
+            guild = self.get_guild(self.guild_id)
+            if guild:
+                logger.info(f"Primary guild: {guild.name} (ID: {guild.id})")
+            else:
+                logger.warning(f"Could not find primary guild with ID: {self.guild_id}")
+
+        await self.change_presence(activity=discord.Game(name=self.status_messages[0]))
+
+        # Start status rotation task
+        self.rotate_status_task = self.loop.create_task(self.rotate_status())
+
+    async def rotate_status(self):
+        """Rotate through status messages periodically."""
+        status_index = 0
+
+        while not self.is_closed():
+            status_index = (status_index + 1) % len(self.status_messages)
+            await self.change_presence(
+                activity=discord.Game(name=self.status_messages[status_index])
+            )
+            await asyncio.sleep(300)  # Change status every 5 minutes
+
+    async def close(self):
+        """Clean up before closing the bot."""
+        logger.info("Bot is shutting down...")
+
+        # Cancel any ongoing tasks
+        if hasattr(self, "rotate_status_task"):
+            self.rotate_status_task.cancel()
+
+        await super().close()
+
+
+# Create bot instance
+bot = CustomBot()
