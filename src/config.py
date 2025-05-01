@@ -7,19 +7,19 @@ class BOT:
     GUILD_ID = os.getenv("GUILD_ID")
 
     class LOG:
-        LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "logs/bot.log")
-        LOG_TO_FILE = os.getenv("LOG_TO_FILE", "True").lower() == "true"
-        LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+        LOG_FILE_PATH = "logs/bot.log"
+        LOG_TO_FILE = True
+        LOG_LEVEL = "INFO"
 
     class DB:
         DB_PATH = "data/bot.db"
 
     class WELCOME:
-        WELCOME_CHANNEL_ID = os.getenv("WELCOME_CHANNEL_ID")
-        ROLE_ID = os.getenv("WELCOME_ROLE_ID")
+        WELCOME_CHANNEL_ID = "1367170633120743465"
+        ROLE_ID = "1366827175436746782"
 
     class GOODBYE:
-        GOODBYE_CHANNEL_ID = os.getenv("GOODBYE_CHANNEL_ID")
+        GOODBYE_CHANNEL_ID = "1367170655132586054"
 
 
 class LLM:
@@ -40,8 +40,8 @@ class LLM:
 
     class CHATBOT:
         API_KEY = os.getenv("LLM_API_KEY_4")
-        API_URL = os.getenv("LLM_API_URL_4")
-        MODEL = os.getenv("LLM_MODEL_4")
+        API_URL = os.getenv("LLM_API_URL_4", "https://api.openai.com/v1/")
+        MODEL = os.getenv("LLM_MODEL_4", "gpt-4o-mini-search-preview-2025-03-11")
 
         class BOT_CONFIG:
             BOT_NAME = "Leo"
