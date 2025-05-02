@@ -40,79 +40,6 @@ async def save_chat_histories():
         logger.error(f"Failed to save chat histories: {str(e)}")
 
 
-# Image processing helper functions
-async def download_attachment(attachment: discord.Attachment) -> Optional[str]:
-    """
-    Downloads an attachment and saves it to a temporary file.
-
-    Args:
-        attachment: Discord attachment object
-
-    Returns:
-        Path to the saved file, or None if download failed
-    """
-    if not os.path.exists("temp"):
-        os.makedirs("temp", exist_ok=True)
-
-    try:
-        filename = f"temp/{attachment.id}_{attachment.filename}"
-        await attachment.save(filename)
-        return filename
-    except Exception as e:
-        logger.error(f"Failed to download attachment: {str(e)}")
-        return None
-
-
-def is_valid_image(attachment: discord.Attachment) -> bool:
-    """
-    Checks if an attachment is a valid image according to the bot's configuration.
-
-    Args:
-        attachment: Discord attachment object
-
-    Returns:
-        True if the attachment is a valid image, False otherwise
-    """
-    # Check if image processing is enabled
-    if not LLM.CHATBOT.BOT_CONFIG.ALLOW_IMAGES:
-        return False
-
-    # Check file extension
-    file_ext = os.path.splitext(attachment.filename.lower())[1]
-    if file_ext not in LLM.CHATBOT.BOT_CONFIG.ALLOWED_IMAGE_FORMATS:
-        return False
-
-    # Check file size
-    max_size_bytes = LLM.CHATBOT.BOT_CONFIG.MAX_IMAGE_SIZE_MB * 1024 * 1024
-    if attachment.size > max_size_bytes:
-        return False
-
-    # Check dimensions if available
-    if hasattr(attachment, "width") and hasattr(attachment, "height"):
-        if (
-            attachment.width > LLM.CHATBOT.BOT_CONFIG.MAX_IMAGE_WIDTH
-            or attachment.height > LLM.CHATBOT.BOT_CONFIG.MAX_IMAGE_HEIGHT
-        ):
-            return False
-
-    return True
-
-
-def cleanup_temp_files(file_paths: List[str]):
-    """
-    Removes temporary files after they've been processed.
-
-    Args:
-        file_paths: List of file paths to remove
-    """
-    for path in file_paths:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception as e:
-            logger.error(f"Failed to remove temporary file {path}: {str(e)}")
-
-
 @bot.event
 async def on_message(message: discord.Message):
     """Handle incoming messages for the chatbot."""
@@ -151,17 +78,6 @@ async def on_message(message: discord.Message):
         else "None"
     )
 
-    # Check for image attachments
-    image_paths = []
-    has_images = False
-    if message.attachments and LLM.CHATBOT.BOT_CONFIG.ALLOW_IMAGES:
-        for attachment in message.attachments:
-            if is_valid_image(attachment):
-                image_path = await download_attachment(attachment)
-                if image_path:
-                    image_paths.append(image_path)
-                    has_images = True
-
     # Add user message to history with user ID
     chat_histories[channel_id].append(
         {
@@ -169,7 +85,6 @@ async def on_message(message: discord.Message):
             "user_id": user_id,
             "name": user_name,
             "content": message.content,
-            "has_images": has_images,
             "timestamp": datetime.now().isoformat(),
         }
     )
@@ -188,12 +103,7 @@ async def on_message(message: discord.Message):
             user_discriminator,
             user_roles,
             user_top_role,
-            message.content,
-            image_paths,
         )
-
-    # Clean up temporary image files
-    cleanup_temp_files(image_paths)
 
     # Send response, ensuring it doesn't exceed Discord's character limit
     if response:
@@ -249,8 +159,6 @@ async def generate_response(
     user_discriminator: str,
     user_roles: List[str],
     user_top_role: str,
-    message_content: str,
-    image_paths: List[str] = None,
 ) -> Optional[str]:
     """Generate a response using the LLM with context from chat history."""
     if not LLM.CHATBOT.API_KEY:
@@ -262,7 +170,7 @@ async def generate_response(
         llm_client = LLMClient(
             api_key=LLM.CHATBOT.API_KEY,
             api_url=LLM.CHATBOT.API_URL,
-            model=LLM.CHATBOT.MODEL if not image_paths else LLM.CHATBOT.VISION_MODEL,
+            model=LLM.CHATBOT.MODEL,
             max_retries=2,
             retry_base_delay=1.0,
             retry_max_delay=4.0,
@@ -329,49 +237,6 @@ async def generate_response(
                 messages.append(LLMMessage(role="user", content=modified_content))
             else:
                 messages.append(LLMMessage(role=entry["role"], content=content))
-
-        # Handle current message which may include images
-        if image_paths:
-            # Format multimodal message
-            if len(image_paths) == 1:
-                # Single image format
-                formatted_content = llm_client.format_message_with_image(
-                    f"[User {user_id} ({user_name})]: {message_content}", image_paths[0]
-                )
-                messages.append(LLMMessage(role="user", content=formatted_content))
-            else:
-                # Multiple images not in history but in current message
-                # Create a combined message with multiple images
-                logger.info(f"Processing message with {len(image_paths)} images")
-                multi_content = [
-                    {
-                        "type": "text",
-                        "text": f"[User {user_id} ({user_name})]: {message_content}",
-                    }
-                ]
-
-                for img_path in image_paths:
-                    try:
-                        with open(img_path, "rb") as img_file:
-                            import base64
-
-                            base64_image = base64.b64encode(img_file.read()).decode(
-                                "utf-8"
-                            )
-
-                        # Add image to content
-                        multi_content.append(
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
-                                },
-                            }
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to process image {img_path}: {str(e)}")
-
-                messages.append(LLMMessage(role="user", content=multi_content))
 
         # Generate response
         response = await llm_client.invoke(
