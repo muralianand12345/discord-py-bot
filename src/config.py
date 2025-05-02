@@ -31,6 +31,7 @@ class LLM:
         MODEL = os.getenv("LLM_MODEL_2", "llama-3.3-70b-versatile")
 
     class TRANSLATOR:
+        LANGUAGE = "Arabic"
         API_KEY = os.getenv("LLM_API_KEY_3")
         API_URL = os.getenv("LLM_API_URL_3", "https://api.groq.com/openai/v1")
         MODEL = os.getenv("LLM_MODEL_3", "llama-3.3-70b-versatile")
