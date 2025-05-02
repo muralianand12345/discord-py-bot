@@ -1,8 +1,11 @@
 import asyncio
 import logging
+import base64
+from io import BytesIO
+from PIL import Image
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
-from typing import Optional, List, Callable
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 logger = logging.getLogger(__name__)
@@ -10,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 class LLMMessage(BaseModel):
     role: str = Field(..., description="Role of the message sender")
-    content: str = Field(..., description="Content of the message")
+    content: Union[str, List[Dict[str, Any]]] = Field(
+        ..., description="Content of the message"
+    )
 
 
 class LLMClient:
@@ -176,3 +181,56 @@ class LLMClient:
         except Exception as e:
             logger.warning(f"LLM API request failed, using fallback: {str(e)}")
             return fallback_fn()
+
+    def format_message_with_image(
+        self, user_content: str, image_path: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Format user message content with an image for OpenAI API format
+
+        Args:
+            user_content: The text content from the user
+            image_path: Path to the image file to include
+
+        Returns:
+            Formatted message content ready for the API
+        """
+        # Read and encode the image file
+        with open(image_path, "rb") as img_file:
+            base64_image = base64.b64encode(img_file.read()).decode("utf-8")
+
+        # Determine the image type
+        image_bytes = base64.b64decode(base64_image)
+        image_stream = BytesIO(image_bytes)
+        image = Image.open(image_stream)
+        image_type = image.format.lower()
+
+        # Format according to OpenAI's content format
+        return [
+            {"type": "text", "text": user_content},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/{image_type};base64,{base64_image}"},
+            },
+        ]
+
+    def format_message_with_image_url(
+        self, user_content: str, image_url: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Format user message content with an external image URL
+
+        Args:
+            user_content: The text content from the user
+            image_url: URL of the image to include
+
+        Returns:
+            Formatted message content ready for the API
+        """
+        return [
+            {"type": "text", "text": user_content},
+            {
+                "type": "image_url",
+                "image_url": {"url": image_url},
+            },
+        ]
