@@ -1,8 +1,8 @@
 import asyncio
 import discord
 import logging
-from discord.ext import commands
 from datetime import datetime
+from discord.ext import commands
 
 from config import BOT
 from utils.logging_manager import LoggingManager
@@ -44,6 +44,7 @@ class CustomBot(commands.Bot):
     async def setup_hook(self):
         """Initialize bot extensions and load event listeners."""
         await self.load_event_handlers()
+        await self.load_commands()
         logger.info("Bot setup complete.")
 
     async def load_event_handlers(self):
@@ -55,6 +56,16 @@ class CustomBot(commands.Bot):
             logger.info("Loaded event handlers successfully")
         except Exception as e:
             logger.error(f"Failed to load event handlers: {str(e)}")
+
+    async def load_commands(self):
+        """Load all commands from the commands directory."""
+        try:
+            # Import all commands
+            from commands import all_commands
+
+            logger.info("Loaded commands successfully")
+        except Exception as e:
+            logger.error(f"Failed to load commands: {str(e)}")
 
     async def on_ready(self):
         """Called when the bot is ready and connected."""

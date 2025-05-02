@@ -1,10 +1,10 @@
 import discord
 import random
 
-
 from bot import bot, logger
 from config import BOT, LLM
 from utils.llm import LLMClient, LLMMessage
+from utils.translator import Translator
 
 
 @bot.event
@@ -20,14 +20,16 @@ async def on_member_join(member):
     )
 
     # Get the configured translation language
-    translation_language = getattr(LLM.TRANSLATOR, "LANGUAGE", "Japanese")
+    translation_language = await Translator.get_translation_language()
 
-    # Translate the member's name to the configured language
-    translated_name = await translate_name(member.name, translation_language)
+    # Translate the member's display name to the configured language
+    translated_name = await Translator.translate_name(
+        member.display_name, translation_language
+    )
 
     # Set the new nickname
     try:
-        if translated_name and translated_name != member.name:
+        if translated_name and translated_name != member.display_name:
             await member.edit(nick=translated_name)
             logger.info(f"Changed nickname for {member.name} to {translated_name}")
     except Exception as e:
@@ -77,7 +79,7 @@ async def create_welcome_embed(member, translated_name=None, language="Japanese"
     )
 
     # Add translated name if available
-    if translated_name and translated_name != member.name:
+    if translated_name and translated_name != member.display_name:
         embed.add_field(name=f"{language} Name", value=translated_name, inline=True)
 
     embed.add_field(
@@ -127,7 +129,7 @@ async def generate_welcome_message(member, translated_name=None, language="Japan
 
             name_info = (
                 f"Their name has been translated to {language} as '{translated_name}'."
-                if translated_name and translated_name != member.name
+                if translated_name and translated_name != member.display_name
                 else ""
             )
 
@@ -153,62 +155,3 @@ async def generate_welcome_message(member, translated_name=None, language="Japan
 
     # Fallback to random default message
     return random.choice(default_messages)
-
-
-async def translate_name(name, language="Japanese"):
-    """Translates a name using LLM."""
-    # Skip translation if name is already in non-latin characters
-    if any(ord(char) > 127 for char in name):
-        return name
-
-    if LLM.TRANSLATOR.API_KEY:
-        try:
-            # Create LLM client
-            llm_client = LLMClient(
-                api_key=LLM.TRANSLATOR.API_KEY,
-                api_url=LLM.TRANSLATOR.API_URL,
-                model=LLM.TRANSLATOR.MODEL,
-                max_retries=3,
-                retry_base_delay=1.0,
-                retry_max_delay=8.0,
-                request_timeout=10.0,
-            )
-
-            prompt = LLMMessage(
-                role="user",
-                content=f"""Translate the name "{name}" to {language}.
-                If the name has a common {language} equivalent, use that.
-                Otherwise, use phonetic representation that sounds similar in {language}.
-                Just provide the translated name without explanation.
-                """,
-            )
-
-            # Simple invocation with no fallback
-            response = await llm_client.invoke(
-                messages=[prompt],
-                temperature=0.3,
-                max_tokens=50,
-            )
-
-            # Clean up the response
-            if response:
-                # Remove any explanations, just get the name
-                response = response.strip()
-                # Remove any quotes that might be in the response
-                response = response.replace('"', "").replace("'", "")
-                # If response is too long, trim it
-                if len(response) > 15:
-                    # Try to find where the actual name ends
-                    for char in [".", ",", "\n", " "]:
-                        if char in response:
-                            response = response.split(char)[0]
-
-                # If we have a valid response, return it
-                if response.strip():
-                    return response
-
-        except Exception as e:
-            logger.error(f"Failed to translate name using LLM: {str(e)}")
-
-    # Return original name if translation fails
-    return name
