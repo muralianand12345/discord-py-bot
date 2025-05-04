@@ -28,6 +28,24 @@ def register_commands_help() -> None:
         !nickname reset @user1 @user2
     """
 
+    # Language command help
+    bot.get_command(
+        "language"
+    ).help = """
+    Check or change the default translation language for the bot.
+    
+    Usage:
+        !language - Show current language
+        !language [language] - Set new default language
+        
+    Examples:
+        !language
+        !language Spanish
+        !language Japanese
+    
+    Note: This setting persists across bot restarts and affects welcome messages.
+    """
+
 
 async def check_command_permissions(
     ctx: commands.Context, permission_name: str

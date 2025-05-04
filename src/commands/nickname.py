@@ -121,6 +121,9 @@ async def process_user_mode(ctx, args):
     # Parse arguments and extract language
     language = await extract_language(args)
 
+    # Set as new default language
+    await Translator.set_translation_language(language)
+
     # Get mentioned users
     mentioned_users = ctx.message.mentions
 
@@ -146,6 +149,9 @@ async def process_role_mode(ctx, args):
 
     # Parse arguments and extract language
     language = await extract_language(args)
+
+    # Set as new default language
+    await Translator.set_translation_language(language)
 
     # Extract role name
     role_name = extract_quoted_text(args)
@@ -185,6 +191,9 @@ async def process_all_mode(ctx, args):
     """Process nickname command in all mode."""
     # Extract language if provided
     language = await extract_language(args or "")
+
+    # Set as new default language
+    await Translator.set_translation_language(language)
 
     # Get all non-bot members
     members = [member for member in ctx.guild.members if not member.bot]

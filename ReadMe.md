@@ -87,7 +87,7 @@ python main.py
 
 ## 🏗️ Project Structure
 
-```
+```bash
 discord-py-bot/
 ├── logs/                  # Log files
 ├── data/                  # Chatbot history and database
@@ -133,7 +133,7 @@ class TRANSLATOR:
 
 The bot provides various commands for nickname management:
 
-```
+```bash
 !nickname user @user1 @user2 language=Spanish  # Translate specific users' names
 !nickname role "New Members" language=Japanese  # Translate names for a role
 !nickname all language=Arabic                   # Translate all member names

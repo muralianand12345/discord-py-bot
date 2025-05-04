@@ -5,6 +5,7 @@ import random
 from bot import bot, logger
 from config import BOT, LLM
 from utils.llm import LLMClient, LLMMessage
+from utils.translator import Translator
 
 
 @bot.event
@@ -35,9 +36,12 @@ async def on_member_remove(member):
 
 async def create_goodbye_embed(member):
     """Creates a custom goodbye embed for the departing member."""
+    # Get current language from persistent settings
+    language = await Translator.get_translation_language()
+
     embed = discord.Embed(
         title=f"Goodbye! 👋",
-        description=await generate_goodbye_message(member),
+        description=await generate_goodbye_message(member, language),
         color=0xED4245,  # Soft red color
     )
 
@@ -69,8 +73,12 @@ async def create_goodbye_embed(member):
     return embed
 
 
-async def generate_goodbye_message(member):
+async def generate_goodbye_message(member, language=None):
     """Generate a personalized goodbye message using LLM if available."""
+    # If no language provided, get from persistent settings
+    if language is None:
+        language = await Translator.get_translation_language()
+
     # Default goodbye messages as fallback
     default_messages = [
         f"We'll miss you, {member.name}! Hope to see you again soon!",
@@ -95,6 +103,7 @@ async def generate_goodbye_message(member):
                 who just left the server {member.guild.name}.
                 The message should be 1-2 sentences, respectful, and wishing them well.
                 Don't use hashtags or emojis and only English.
+                The server's primary language is {language}.
                 """,
             )
 

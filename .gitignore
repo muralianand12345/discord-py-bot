@@ -161,3 +161,4 @@ cython_debug/
 uv.lock
 data/bot.db
 data/chatbot_history.json
+data/settings.json

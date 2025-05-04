@@ -19,7 +19,7 @@ async def on_member_join(member):
         f"Member joined: {member.name}#{member.discriminator} (ID: {member.id})"
     )
 
-    # Get the configured translation language
+    # Get the configured translation language from persistent settings
     translation_language = await Translator.get_translation_language()
 
     # Translate the member's display name to the configured language
@@ -65,8 +65,12 @@ async def on_member_join(member):
             logger.error(f"Failed to send welcome message for {member.name}: {str(e)}")
 
 
-async def create_welcome_embed(member, translated_name=None, language="Japanese"):
+async def create_welcome_embed(member, translated_name=None, language=None):
     """Creates a custom welcome embed for the new member."""
+    # If no language is provided, get it from persistent settings
+    if language is None:
+        language = await Translator.get_translation_language()
+
     embed = discord.Embed(
         title=f"Welcome to {member.guild.name}! 🎉",
         description=await generate_welcome_message(member, translated_name, language),
@@ -107,8 +111,12 @@ async def create_welcome_embed(member, translated_name=None, language="Japanese"
     return embed
 
 
-async def generate_welcome_message(member, translated_name=None, language="Japanese"):
+async def generate_welcome_message(member, translated_name=None, language=None):
     """Generate a personalized welcome message using LLM if available."""
+    # If no language is provided, get it from persistent settings
+    if language is None:
+        language = await Translator.get_translation_language()
+
     # Default welcome messages as fallback
     default_messages = [
         f"Welcome to our community, {member.name}! Feel free to introduce yourself!",
