@@ -38,8 +38,8 @@ class LLM:
 
     class CHATBOT:
         API_KEY = os.getenv("LLM_API_KEY_4")
-        API_URL = os.getenv("LLM_API_URL_4", None)  # https://api.perplexity.ai
-        MODEL = os.getenv("LLM_MODEL_4", "gpt-4o-search-preview")  # sonar-pro
+        API_URL = os.getenv("LLM_API_URL_4", "https://api.perplexity.ai")  # https://api.perplexity.ai
+        MODEL = os.getenv("LLM_MODEL_4", "sonar-pro")  # sonar-pro gpt-4o-search-preview
 
         class BOT_CONFIG:
             BOT_NAME = "Leo"
