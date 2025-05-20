@@ -39,7 +39,7 @@ class LLM:
     class CHATBOT:
         API_KEY = os.getenv("LLM_API_KEY_4")
         API_URL = os.getenv("LLM_API_URL_4", "https://api.groq.com/openai/v1")  # https://api.perplexity.ai
-        MODEL = os.getenv("LLM_MODEL_4", "meta-llama/llama-4-maverick-17b-128e-instruct")  # sonar-pro gpt-4o-search-preview
+        MODEL = os.getenv("LLM_MODEL_4", "compound-beta")  # sonar-pro gpt-4o-search-preview
 
         class BOT_CONFIG:
             BOT_NAME = "Leo"
